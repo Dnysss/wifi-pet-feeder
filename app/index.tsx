@@ -1,31 +1,24 @@
-import React, { useState } from 'react';
-import {
-  Pressable,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import React, { useState } from "react";
+import { Pressable, StatusBar, StyleSheet, Text, View } from "react-native";
 
-import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
-import { router } from 'expo-router';
-import FeedCard from '../components/FeedCard';
+import { router } from "expo-router";
+import FeedCard from "../components/FeedCard";
 
 export default function WifiPetFeeder() {
-
   const [feeds, setFeeds] = useState([
     {
       id: 1,
-      time: '09:00',
-      days: 'Todos Os Dias',
+      time: "09:00",
+      days: "Todos Os Dias",
       portions: 3,
       enabled: true,
     },
     {
       id: 2,
-      time: '12:00',
-      days: 'Todos Os Dias',
+      time: "12:00",
+      days: "Todos Os Dias",
       portions: 3,
       enabled: false,
     },
@@ -39,36 +32,25 @@ export default function WifiPetFeeder() {
               ...feed,
               enabled: !feed.enabled,
             }
-          : feed
-      )
+          : feed,
+      ),
     );
   }
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#05CFA5" />
 
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor="#05CFA5"
-      />
-
-      {/* ======================
-          PARTE VERDE
-      ====================== */}
+      {/* PARTE VERDE */}
 
       <View style={styles.greenArea}>
-
         {/* <Text style={styles.title}>
           Wifi Pet Feeder
         </Text>*/}
 
         {/* Configurações */}
         <Pressable style={styles.settingsButton}>
-          <Feather
-            name="settings"
-            size={20}
-            color="#087D6B"
-          />
+          <Feather name="settings" size={20} color="#087D6B" />
         </Pressable>
 
         {/* Programações */}
@@ -82,81 +64,53 @@ export default function WifiPetFeeder() {
 
         {/* Alimentação manual */}
         <Pressable style={styles.manualButton}>
-
-          
-
-          <Text style={styles.manualText}>
-            Manual Feed
-          </Text>
-
+          <Text style={styles.manualText}>Manual Feed</Text>
         </Pressable>
-
       </View>
-
 
       {/* ======================
           PARTE INFERIOR
       ====================== */}
 
       <View style={styles.bottomArea}>
-
         <View style={styles.feedList}>
-
           {feeds.map((feed) => (
-
             <FeedCard
               key={feed.id}
-
               time={feed.time}
-
               days={feed.days}
-
               portions={feed.portions}
-
               enabled={feed.enabled}
-
               onToggle={() => toggleFeed(feed.id)}
             />
-
           ))}
-
         </View>
-
 
         {/* BOTÃO + */}
 
-        <Pressable style={styles.addButton}
-        onPress={() => router.push('/add-feed')}
+        <Pressable
+          style={styles.addButton}
+          onPress={() => router.push("/add-feed")}
         >
-
-          <Ionicons
-            name="add"
-            size={28}
-            color="#FFFFFF"
-          />
-
+          <Ionicons name="add" size={28} color="#FFFFFF" />
         </Pressable>
-
       </View>
-
     </View>
   );
 }
 
-
 const styles = StyleSheet.create({
-
   container: {
     flex: 1,
-    backgroundColor: '#F4F4F8',
+    backgroundColor: "#F4F4F8",
   },
 
   greenArea: {
-    height: '42%',
+    height: "42%",
 
-    backgroundColor: '#05CFA5',
+    backgroundColor: "#05CFA5",
 
-    position: 'absolute',
+    position: "absolute",
 
     top: 0,
     left: 0,
@@ -164,18 +118,18 @@ const styles = StyleSheet.create({
   },
 
   title: {
-    position: 'absolute',
+    position: "absolute",
 
     top: 5,
     left: 10,
 
     fontSize: 12,
 
-    color: '#707070',
+    color: "#707070",
   },
 
   settingsButton: {
-    position: 'absolute',
+    position: "absolute",
 
     top: 116,
     left: 22,
@@ -185,16 +139,16 @@ const styles = StyleSheet.create({
 
     borderRadius: 8,
 
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
 
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
 
     elevation: 3,
   },
 
   layersButton: {
-    position: 'absolute',
+    position: "absolute",
 
     top: 116,
     right: 22,
@@ -204,57 +158,57 @@ const styles = StyleSheet.create({
 
     borderRadius: 8,
 
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
 
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
 
     elevation: 3,
   },
 
   manualButton: {
-    position: 'absolute',
+    position: "absolute",
 
     top: 44,
 
-    alignSelf: 'center',
+    alignSelf: "center",
 
     width: 112,
     height: 112,
 
     borderRadius: 56,
 
-    backgroundColor: '#F7FFF9',
+    backgroundColor: "#F7FFF9",
 
     borderWidth: 1.5,
-    borderColor: '#B8B8B8',
+    borderColor: "#B8B8B8",
 
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
 
     elevation: 4,
   },
 
   manualText: {
-    position: 'absolute',
+    position: "absolute",
 
     bottom: 27,
 
     fontSize: 9,
 
-    color: '#111111',
+    color: "#111111",
   },
 
   bottomArea: {
-    position: 'absolute',
+    position: "absolute",
 
     left: 0,
     right: 0,
     bottom: 0,
 
-    height: '67%',
+    height: "67%",
 
-    backgroundColor: '#F4F4F8',
+    backgroundColor: "#F4F4F8",
 
     borderTopLeftRadius: 40,
     borderTopRightRadius: 40,
@@ -269,23 +223,22 @@ const styles = StyleSheet.create({
   },
 
   addButton: {
-    position: 'absolute',
+    position: "absolute",
 
     bottom: 80,
 
-    alignSelf: 'center',
+    alignSelf: "center",
 
     width: 40,
     height: 40,
 
     borderRadius: 10,
 
-    backgroundColor: '#00CFA5',
+    backgroundColor: "#00CFA5",
 
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
 
     elevation: 4,
   },
-
 });
