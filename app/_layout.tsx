@@ -10,7 +10,7 @@ export default function RootLayout() {
       <Stack.Screen
         name="index"
         options={{
-          title: 'Wifi Pet Feeder',
+          title: "Wifi Pet Feeder",
         }}
       />
 
