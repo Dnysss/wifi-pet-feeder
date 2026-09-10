@@ -1,0 +1,346 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <AccelStepper.h>
+#include <WiFiClientSecure.h>
+
+
+// CONFIGURAÇÃO DO WIFI
+
+const char* WIFI_SSID = "NOMDE_DA_REDE";
+const char* WIFI_PASSWORD = "SENHA_DA_REDE";
+#include <WiFi.h>
+
+
+//HIVEMQ CLOUD
+
+const char* MQTT_BROKER =
+  "BROKER_HIVEMQ";
+
+const int MQTT_PORT = 8883;
+
+//CREDENCIAIS HIVEMQ
+
+const char* MQTT_USERNAME = "";
+const char* MQTT_PASSWORD = "";
+
+//TOPICOS
+
+const char* MQTT_TOPIC_COMANDO =
+  "denys/alimentador/comando";
+
+const char* MQTT_TOPIC_STATUS =
+  "denys/alimentador/status";
+
+//CERTIFICADO
+
+static const char root_ca[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+-----END CERTIFICATE-----
+)EOF";
+
+
+// IN1 = D2
+// IN2 = D4
+// IN3 = D5
+// IN4 = D13
+
+AccelStepper motor(
+  AccelStepper::FULL4WIRE,
+  2,   // IN1
+  5,   // IN3
+  4,   // IN2
+  13   // IN4
+);
+
+//CONFIGURAÇÕES DO MOTOR
+
+int velocidade = 500;
+
+bool motorLigado = false;
+
+unsigned long inicioMotor = 0;
+unsigned long tempoMotor = 0;
+
+// OBJETOS MQTT
+
+WiFiClientSecure espClient;
+
+PubSubClient mqttClient(espClient);
+
+// CONECTAR WI-FI
+
+void conectarWiFi() {
+
+  Serial.print("Conectando ao Wi-Fi");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  while (WiFi.status() != WL_CONNECTED) {
+
+    delay(500);
+
+    Serial.print(".");
+  }
+
+  Serial.println();
+
+  Serial.println("Wi-Fi conectado!");
+
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+
+//PUBLICAR STATUS
+
+void publicarStatus(const char* status) {
+
+  if (mqttClient.connected()) {
+
+    mqttClient.publish(
+      MQTT_TOPIC_STATUS,
+      status
+    );
+
+    Serial.print("Status enviado: ");
+    Serial.println(status);
+  }
+}
+
+// RECEBER MENSAGEM MQTT
+void mensagemRecebida(
+  char* topic,
+  byte* payload,
+  unsigned int length
+) {
+
+  
+//TRANSFORMAR PAYLOAD EM STRING
+
+  String comando = "";
+
+  for (unsigned int i = 0; i < length; i++) {
+
+    comando += (char)payload[i];
+  }
+
+  comando.trim();
+
+  // MOSTRAR COMANDO
+
+  Serial.println();
+  Serial.println("================================");
+
+  Serial.print("Tópico: ");
+  Serial.println(topic);
+
+  Serial.print("Comando recebido: ");
+  Serial.println(comando);
+
+
+  // PARAR MOTOR
+
+  if (comando == "0") {
+
+    motorLigado = false;
+
+    motor.disableOutputs();
+
+    Serial.println("Motor parado.");
+
+    publicarStatus("parado");
+
+    Serial.println("================================");
+
+    return;
+  }
+
+  // CONVERTER PARA SEGUNDOS
+
+  unsigned long segundos = comando.toInt();
+
+  // VALIDAR
+
+  if (segundos > 0) {
+
+    // segundos → milissegundos
+    tempoMotor = segundos * 1000UL;
+
+    // Liga motor
+    motorLigado = true;
+
+    motor.enableOutputs();
+
+    motor.setSpeed(velocidade);
+
+    // Marca início
+    inicioMotor = millis();
+
+    Serial.print("Motor ligado por ");
+    Serial.print(segundos);
+    Serial.println(" segundos.");
+
+    publicarStatus("alimentando");
+
+  } else {
+
+    Serial.println("Comando inválido.");
+
+    publicarStatus("erro_comando");
+  }
+
+  Serial.println("================================");
+}
+// CONECTAR MQTT
+
+void conectarMQTT() {
+
+  while (!mqttClient.connected()) {
+
+    Serial.println();
+
+    Serial.println("Conectando ao HiveMQ...");
+
+    // ID ÚNICO DO ESP32
+
+    String clientId =
+      "ESP32-Alimentador-";
+
+    clientId += String(
+      (uint32_t)ESP.getEfuseMac(),
+      HEX
+    );
+
+    // CONECTAR
+    if (
+      mqttClient.connect(
+        clientId.c_str(),
+        MQTT_USERNAME,
+        MQTT_PASSWORD
+      )
+    ) {
+
+      Serial.println();
+
+      Serial.println("================================");
+      Serial.println("MQTT CONECTADO COM TLS!");
+      Serial.println("================================");
+
+      // ASSINAR TÓPICO DE COMANDO
+
+      if (
+        mqttClient.subscribe(
+          MQTT_TOPIC_COMANDO
+        )
+      ) {
+
+        Serial.print("Inscrito em: ");
+        Serial.println(MQTT_TOPIC_COMANDO);
+
+      } else {
+
+        Serial.println(
+          "Falha ao se inscrever no tópico."
+        );
+      }
+
+      // STATUS INICIAL
+      publicarStatus("online");
+
+    } else {
+
+      Serial.println();
+
+      Serial.println("================================");
+      Serial.println("FALHA NA CONEXÃO MQTT");
+      Serial.println("================================");
+
+      Serial.print("Código PubSubClient: ");
+      Serial.println(
+        mqttClient.state()
+      );
+
+      Serial.println(
+        "Tentando novamente em 5 segundos..."
+      );
+
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+
+  Serial.begin(115200);
+
+  delay(1000);
+
+  Serial.println();
+
+  Serial.println("================================");
+  Serial.println(" ESP32 - ALIMENTADOR PET");
+  Serial.println(" MQTT + TLS + 28BYJ-48");
+  Serial.println("================================");
+
+
+  // MOTOR
+
+  motor.setMaxSpeed(1000);
+
+  motor.setSpeed(velocidade);
+
+  motor.disableOutputs();
+
+  // WI-FI
+
+  conectarWiFi();
+
+  // TLS
+
+  espClient.setCACert(root_ca);
+
+  // MQTT
+
+  mqttClient.setServer(
+    MQTT_BROKER,
+    MQTT_PORT
+  );
+
+  mqttClient.setCallback(
+    mensagemRecebida
+  );
+
+  // CONECTAR
+  conectarMQTT();
+}
+
+void loop() {
+  if (!mqttClient.connected()) {
+
+    conectarMQTT();
+  }
+
+  mqttClient.loop();
+
+  if (motorLigado) {
+    motor.runSpeed();
+
+    // VERIFICAR TEMPO
+    if (
+      millis() - inicioMotor >= tempoMotor
+    ) {
+
+      motorLigado = false;
+
+      motor.disableOutputs();
+
+      Serial.println();
+
+      Serial.println("================================");
+      Serial.println("Tempo terminado. Motor parado.");
+      Serial.println("================================");
+
+      publicarStatus("finalizado");
+    }
+  }
+}

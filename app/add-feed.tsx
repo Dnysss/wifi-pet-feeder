@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-
+import { Ionicons } from "@expo/vector-icons";
+import { router, useLocalSearchParams } from "expo-router";
+import { useState } from "react";
 import {
   FlatList,
   Modal,
@@ -8,73 +9,85 @@ import {
   Text,
   View,
 } from "react-native";
-
-import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-
 import { SafeAreaView } from "react-native-safe-area-context";
 
-// DADOS DA ROLETA
-
-const HOURS = Array.from({ length: 24 }, (_, index) => index);
-
-const MINUTES = Array.from({ length: 60 }, (_, index) => index);
-
-const FEED_TIMES = Array.from({ length: 60 }, (_, index) => index + 1);
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const MINUTES = Array.from({ length: 60 }, (_, i) => i);
+const FEED_TIMES = Array.from({ length: 60 }, (_, i) => i + 1);
+const DAYS = [
+  { id: "mon", label: "Seg." },
+  { id: "tue", label: "Ter." },
+  { id: "wed", label: "Qua." },
+  { id: "thu", label: "Qui." },
+  { id: "fri", label: "Sex." },
+  { id: "sat", label: "Sáb." },
+  { id: "sun", label: "Dom." },
+];
 
 export default function AddFeed() {
-  // ESTADO DO HORÁRIO
+  const params = useLocalSearchParams();
 
   const [hour, setHour] = useState(8);
   const [minute, setMinute] = useState(0);
-
   const [feedVisible, setFeedVisible] = useState(false);
   const [feedTime, setFeedTime] = useState(5);
+  const [tempFeedTime, setTempFeedTime] = useState(5);
 
-  // SALVAR
+  const selectedDays: string[] = params.days
+    ? JSON.parse(params.days as string)
+    : [];
 
-  function handleSave() {
+  const getRepeatText = () => {
+    if (selectedDays.length === 0) return "Apenas uma vez";
+    return DAYS.filter((d) => selectedDays.includes(d.id))
+      .map((d) => d.label)
+      .join(", ");
+  };
+
+  const handleSave = () => {
     const selectedTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    const selectedLabels = DAYS.filter((d) => selectedDays.includes(d.id)).map(
+      (d) => d.label,
+    );
+    const daysText =
+      selectedDays.length === 0 ? "Apenas uma vez" : selectedLabels.join(", ");
 
-    console.log("Horário selecionado:", selectedTime);
+    router.replace({
+      pathname: "/",
+      params: {
+        newFeed: JSON.stringify({
+          time: selectedTime,
+          days: selectedDays,
+          daysText,
+          feedTime,
+        }),
+      },
+    });
+  };
 
-    // Por enquanto apenas mostramos no console.
-    // Depois vamos salvar a programação.
-  }
+  const clampIndex = (y: number, max: number) => {
+    const idx = Math.round(y / 50);
+    return Math.max(0, Math.min(max - 1, idx));
+  };
 
   return (
     <SafeAreaView edges={["top"]} style={styles.container}>
-      {/* HEADER */}
-
       <View style={styles.header}>
-        {/* CANCELAR */}
-
         <Pressable style={styles.cancelButton} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={24} color="#222" />
-
           <Text style={styles.cancelText}>Cancelar</Text>
         </Pressable>
-
-        {/* TÍTULO */}
-
         <Text style={styles.headerTitle}>Alimentação</Text>
-
-        {/* SALVAR */}
-
         <Pressable style={styles.saveButton} onPress={handleSave}>
           <Text style={styles.saveText}>Salvar</Text>
         </Pressable>
       </View>
 
-      {/* ROLETA DE HORÁRIO */}
-
       <View style={styles.timePickerContainer}>
-        {/* HORA */}
-
         <View style={styles.wheelWrapper}>
           <FlatList
             data={HOURS}
-            keyExtractor={(item) => item.toString()}
+            keyExtractor={(i) => i.toString()}
             showsVerticalScrollIndicator={false}
             snapToInterval={50}
             decelerationRate="fast"
@@ -84,15 +97,12 @@ export default function AddFeed() {
               offset: 50 * index,
               index,
             })}
-            contentContainerStyle={{
-              paddingVertical: 50,
-            }}
+            contentContainerStyle={{ paddingVertical: 50 }}
             renderItem={({ item }) => (
               <View style={styles.wheelItem}>
                 <Text
                   style={[
                     styles.wheelText,
-
                     item === hour && styles.selectedWheelText,
                   ]}
                 >
@@ -100,22 +110,18 @@ export default function AddFeed() {
                 </Text>
               </View>
             )}
-            onMomentumScrollEnd={(event) => {
-              const index = Math.round(event.nativeEvent.contentOffset.y / 50);
-
-              setHour(index);
-            }}
+            onMomentumScrollEnd={(e) =>
+              setHour(clampIndex(e.nativeEvent.contentOffset.y, HOURS.length))
+            }
           />
         </View>
 
         <Text style={styles.colon}>:</Text>
 
-        {/* MINUTO */}
-
         <View style={styles.wheelWrapper}>
           <FlatList
             data={MINUTES}
-            keyExtractor={(item) => item.toString()}
+            keyExtractor={(i) => i.toString()}
             showsVerticalScrollIndicator={false}
             snapToInterval={50}
             decelerationRate="fast"
@@ -125,15 +131,12 @@ export default function AddFeed() {
               offset: 50 * index,
               index,
             })}
-            contentContainerStyle={{
-              paddingVertical: 50,
-            }}
+            contentContainerStyle={{ paddingVertical: 50 }}
             renderItem={({ item }) => (
               <View style={styles.wheelItem}>
                 <Text
                   style={[
                     styles.wheelText,
-
                     item === minute && styles.selectedWheelText,
                   ]}
                 >
@@ -141,41 +144,35 @@ export default function AddFeed() {
                 </Text>
               </View>
             )}
-            onMomentumScrollEnd={(event) => {
-              const index = Math.round(event.nativeEvent.contentOffset.y / 50);
-
-              setMinute(index);
-            }}
+            onMomentumScrollEnd={(e) =>
+              setMinute(
+                clampIndex(e.nativeEvent.contentOffset.y, MINUTES.length),
+              )
+            }
           />
         </View>
       </View>
 
-      {/* LINHA DO HORÁRIO SELECIONADO */}
-
-      <View style={[styles.selectionLine, styles.selectionLineTop]} />
-
-      <View style={[styles.selectionLine, styles.selectionLineBottom]} />
-
-      {/* REPEAT */}
-
       <Pressable style={styles.option} onPress={() => router.push("/repeat")}>
         <Text style={styles.optionTitle}>Repetir</Text>
-
         <View style={styles.optionRight}>
-          <Text style={styles.optionValue}>Apenas uma vez</Text>
-
+          <Text style={styles.optionValue} numberOfLines={1}>
+            {getRepeatText()}
+          </Text>
           <Ionicons name="chevron-forward" size={20} color="#999" />
         </View>
       </Pressable>
 
-      {/* FEED */}
-
-      <Pressable style={styles.option} onPress={() => setFeedVisible(true)}>
+      <Pressable
+        style={styles.option}
+        onPress={() => {
+          setTempFeedTime(feedTime);
+          setFeedVisible(true);
+        }}
+      >
         <Text style={styles.optionTitle}>Feed</Text>
-
         <View style={styles.optionRight}>
           <Text style={styles.optionValue}>{feedTime} segundos</Text>
-
           <Ionicons name="chevron-forward" size={20} color="#999" />
         </View>
       </Pressable>
@@ -188,54 +185,44 @@ export default function AddFeed() {
       >
         <View style={styles.modalBackground}>
           <View style={styles.feedModal}>
-            {/* TÍTULO */}
-
             <View style={styles.feedModalHeader}>
               <Text style={styles.feedModalTitle}>Tempo</Text>
             </View>
-
-            {/* ROLETA */}
-
             <View style={styles.feedWheelContainer}>
               <FlatList
                 data={FEED_TIMES}
-                keyExtractor={(item) => item.toString()}
+                keyExtractor={(i) => i.toString()}
                 showsVerticalScrollIndicator={false}
                 snapToInterval={50}
                 decelerationRate="fast"
-                initialScrollIndex={feedTime - 1}
+                initialScrollIndex={tempFeedTime - 1}
                 getItemLayout={(_, index) => ({
                   length: 50,
                   offset: 50 * index,
                   index,
                 })}
-                contentContainerStyle={{
-                  paddingVertical: 50,
-                }}
+                contentContainerStyle={{ paddingVertical: 50 }}
                 renderItem={({ item }) => (
                   <View style={styles.wheelItem}>
                     <Text
                       style={[
                         styles.wheelText,
-                        item === feedTime && styles.selectedWheelText,
+                        item === tempFeedTime && styles.selectedWheelText,
                       ]}
                     >
                       {item}
                     </Text>
                   </View>
                 )}
-                onMomentumScrollEnd={(event) => {
-                  const index = Math.round(
-                    event.nativeEvent.contentOffset.y / 50,
+                onMomentumScrollEnd={(e) => {
+                  const idx = clampIndex(
+                    e.nativeEvent.contentOffset.y,
+                    FEED_TIMES.length,
                   );
-
-                  setFeedTime(index + 1);
+                  setTempFeedTime(FEED_TIMES[idx]);
                 }}
               />
             </View>
-
-            {/* BOTÕES */}
-
             <View style={styles.feedModalActions}>
               <Pressable
                 style={styles.modalActionButton}
@@ -243,10 +230,12 @@ export default function AddFeed() {
               >
                 <Text style={styles.cancelModalText}>Cancelar</Text>
               </Pressable>
-
               <Pressable
                 style={styles.modalActionButton}
-                onPress={() => setFeedVisible(false)}
+                onPress={() => {
+                  setFeedTime(tempFeedTime);
+                  setFeedVisible(false);
+                }}
               >
                 <Text style={styles.confirmModalText}>Confirmar</Text>
               </Pressable>
@@ -263,143 +252,103 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FFFFFF",
   },
-
-  // HEADER
   header: {
-    height: 65,
-    borderBottomWidth: 1,
-    borderBottomColor: "#EEEEEE",
+    height: 60,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 15,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEEEEE",
   },
-
   cancelButton: {
     flexDirection: "row",
     alignItems: "center",
-    width: 95,
+    width: 90,
   },
-
   cancelText: {
     fontSize: 16,
     color: "#222",
+    marginLeft: 2,
   },
-
   headerTitle: {
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: "600",
     color: "#222",
   },
-
   saveButton: {
-    width: 60,
+    width: 90,
     alignItems: "flex-end",
   },
-
   saveText: {
     fontSize: 16,
-    color: "#00B894",
+    color: "#00CFA5",
     fontWeight: "600",
   },
-
-  // ROLETA
   timePickerContainer: {
-    height: 280,
+    height: 150,
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
+    marginTop: 30,
   },
-
   wheelWrapper: {
     height: 150,
-    width: 75,
+    width: 70,
     overflow: "hidden",
   },
-
   wheelItem: {
     height: 50,
-    alignItems: "center",
     justifyContent: "center",
+    alignItems: "center",
   },
-
   wheelText: {
     fontSize: 24,
-    color: "#D5D5D5",
+    color: "#999",
   },
-
   selectedWheelText: {
-    fontSize: 28,
-    color: "#111111",
-    fontWeight: "500",
+    fontSize: 24,
+    color: "#222",
+    fontWeight: "600",
   },
-
   colon: {
-    fontSize: 27,
-    color: "#111111",
-    marginHorizontal: 8,
+    fontSize: 24,
+    color: "#222",
+    marginHorizontal: 5,
   },
-
-  // LINHAS DA SELEÇÃO
-  selectionLine: {
-    position: "absolute",
-
-    left: 95,
-
-    right: 95,
-
-    height: 1,
-
-    backgroundColor: "#E5E5E5",
-  },
-
-  selectionLineTop: {
-    top: 65 + 105,
-  },
-
-  selectionLineBottom: {
-    top: 65 + 155,
-  },
-
-  // OPÇÕES
   option: {
-    height: 75,
-    borderTopWidth: 1,
-    borderTopColor: "#F1F1F1",
-    paddingHorizontal: 20,
+    minHeight: 65,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEEEEE",
   },
-
   optionTitle: {
     fontSize: 17,
     color: "#222",
   },
-
   optionRight: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    maxWidth: "60%",
   },
-
   optionValue: {
-    fontSize: 16,
-    color: "#A0A0A0",
+    fontSize: 15,
+    color: "#999",
+    marginRight: 5,
   },
-
   modalBackground: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.35)",
     justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.35)",
   },
-
   feedModal: {
-    height: 330,
     backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 25,
-    borderTopRightRadius: 25,
-    overflow: "hidden",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 25,
   },
   feedModalHeader: {
     height: 60,
@@ -408,58 +357,31 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#EEEEEE",
   },
-
   feedModalTitle: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#777",
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#222",
   },
-
   feedWheelContainer: {
-    height: 190,
-    width: 100,
-    alignSelf: "center",
+    height: 150,
     overflow: "hidden",
   },
-
-  feedSelectionLine: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: "#E5E5E5",
-  },
-
-  feedSelectionLineTop: {
-    top: 60 + 95,
-  },
-
-  feedSelectionLineBottom: {
-    top: 60 + 145,
-  },
-
   feedModalActions: {
-    height: 65,
-    borderTopWidth: 1,
-    borderTopColor: "#EEEEEE",
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-around",
+    marginTop: 10,
   },
-
   modalActionButton: {
-    paddingHorizontal: 40,
-    paddingVertical: 10,
+    paddingHorizontal: 30,
+    paddingVertical: 12,
   },
-
   cancelModalText: {
     fontSize: 16,
-    color: "#555",
+    color: "#999",
   },
-
   confirmModalText: {
     fontSize: 16,
-    color: "#00B894",
+    color: "#00CFA5",
     fontWeight: "600",
   },
 });

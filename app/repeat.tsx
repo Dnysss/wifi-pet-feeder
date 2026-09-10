@@ -1,13 +1,9 @@
-import React, { useState } from "react";
-
+import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-
 import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 
-import { SafeAreaView } from "react-native-safe-area-context";
-
-// DIAS DA SEMANA
 
 const DAYS = [
   {
@@ -41,11 +37,7 @@ const DAYS = [
 ];
 
 export default function Repeat() {
-  // DIAS SELECIONADOS
-
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
-
-  // SELECIONAR / DESSELECIONAR DIA
 
   function toggleDay(dayId: string) {
     setSelectedDays((currentDays) => {
@@ -57,39 +49,43 @@ export default function Repeat() {
     });
   }
 
-  // APENAS UMA VEZ
-
   function selectOnlyOnce() {
     setSelectedDays([]);
   }
 
-  // VOLTAR
-
   function handleBack() {
-    console.log("Dias selecionados:", selectedDays);
     router.back();
   }
 
-  return (
-    <SafeAreaView edges={["top"]} style={styles.container}>
-      {/* HEADER */}
+  function handleConfirm() {
+    console.log("Dias confirmados:", selectedDays);
 
+    router.replace({
+      pathname: "/add-feed",
+      params: {
+        days: JSON.stringify(selectedDays),
+      },
+    });
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Pressable style={styles.backButton} onPress={handleBack}>
           <Ionicons name="chevron-back" size={25} color="#222" />
+
           <Text style={styles.backText}>Voltar</Text>
         </Pressable>
+
         <Text style={styles.title}>Repetir</Text>
+
         <View style={styles.headerSpace} />
       </View>
-
-      {/* APENAS UMA VEZ*/}
 
       <Pressable style={styles.row} onPress={selectOnlyOnce}>
         <Text
           style={[
             styles.dayText,
-
             selectedDays.length === 0 && styles.selectedText,
           ]}
         >
@@ -101,7 +97,6 @@ export default function Repeat() {
         )}
       </Pressable>
 
-      {/* DIAS DA SEMANA */}
       {DAYS.map((day) => {
         const selected = selectedDays.includes(day.id);
 
@@ -121,90 +116,80 @@ export default function Repeat() {
           </Pressable>
         );
       })}
+
+      <View style={styles.confirmContainer}>
+        <Pressable style={styles.confirmButton} onPress={handleConfirm}>
+          <Text style={styles.confirmText}>Confirmar</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
 
-// ESTILOS
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-
     backgroundColor: "#FFFFFF",
   },
-
-  // HEADER
-
   header: {
-    height: 65,
-
-    borderBottomWidth: 1,
-
-    borderBottomColor: "#EEEEEE",
-
+    height: 60,
     flexDirection: "row",
-
     alignItems: "center",
-
     justifyContent: "space-between",
-
-    paddingHorizontal: 15,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEEEEE",
   },
-
   backButton: {
-    width: 90,
-
     flexDirection: "row",
-
     alignItems: "center",
+    width: 90,
   },
-
   backText: {
     fontSize: 16,
-
     color: "#222",
+    marginLeft: 2,
   },
-
   title: {
-    fontSize: 17,
-
+    fontSize: 18,
     fontWeight: "600",
-
     color: "#222",
   },
-
   headerSpace: {
     width: 90,
   },
-
-  // LINHAS
-
   row: {
-    height: 64,
-
-    paddingHorizontal: 20,
-
-    borderBottomWidth: 1,
-
-    borderBottomColor: "#F0F0F0",
-
+    height: 55,
     flexDirection: "row",
-
     alignItems: "center",
-
     justifyContent: "space-between",
+    paddingHorizontal: 25,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F1F1",
   },
-
   dayText: {
     fontSize: 17,
-
-    color: "#555",
-  },
-
-  selectedText: {
     color: "#222",
-
-    fontWeight: "500",
+  },
+  selectedText: {
+    color: "#00CFA5",
+    fontWeight: "600",
+  },
+  confirmContainer: {
+    marginTop: "auto",
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  confirmButton: {
+    height: 52,
+    borderRadius: 12,
+    backgroundColor: "#00CFA5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmText: {
+    color: "#FFFFFF",
+    fontSize: 17,
+    fontWeight: "600",
   },
 });
