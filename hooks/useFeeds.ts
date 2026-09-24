@@ -1,58 +1,40 @@
-import { AsyncStorageFeedRepository } from "@/services/storage/AsyncStorageFeedRepository";
-import { IFeedRepository } from "@/services/storage/IFeedRepository";
+import { MqttService } from "@/services/mqtt/MqttService";
 import { Feed } from "@/types/feed";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 
-const repository: IFeedRepository = new AsyncStorageFeedRepository();
-
-export function useFeeds() {
+export const useFeeds = () => {
   const [feeds, setFeeds] = useState<Feed[]>([]);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const mqttService = MqttService.getInstance();
 
-  const loadFeeds = useCallback(async () => {
-    const data = await repository.getFeeds();
-    setFeeds(data);
-    setIsLoaded(true);
-  }, []);
+  // funcao para atualizar o estado local e sincronizar com o esp
+  const atualizarESincronizar = (novosFeeds: Feed[]) => {
+    setFeeds(novosFeeds);
 
-  const addFeed = async (newFeedData: {
-    time: string;
-    daysText: string;
-    feedTime: number;
-  }) => {
-    const newFeed: Feed = {
-      id: Date.now(),
-      time: newFeedData.time,
-      days: newFeedData.daysText,
-      portions: newFeedData.feedTime,
-      enabled: true,
-    };
-
-    setFeeds((prev) => {
-      if (prev.some((f) => f.id === newFeed.id)) return prev;
-      const updated = [...prev, newFeed];
-      repository.saveFeeds(updated);
-      return updated;
-    });
+    //transmitir lista via mqtt para a memoria flash do eps
+    mqttService.sincronizarAgendamentos(novosFeeds);
   };
 
-  const toggleFeed = async (id: number) => {
-    setFeeds((prev) => {
-      const updated = prev.map((f) =>
-        f.id === id ? { ...f, enabled: !f.enabled } : f,
-      );
-      repository.saveFeeds(updated);
-      return updated;
-    });
+  const addFeed = (novoFeed: Feed) => {
+    const atualizados = [...feeds, novoFeed];
+    atualizarESincronizar(atualizados);
   };
 
-  const deleteFeed = async (id: number) => {
-    setFeeds((prev) => {
-      const updated = prev.filter((f) => f.id !== id);
-      repository.saveFeeds(updated);
-      return updated;
-    });
+  const toggleFeed = (id: string) => {
+    const atualizados = feeds.map((item) =>
+      item.id === id ? { ...item, enabled: !item.enabled } : item,
+    );
+    atualizarESincronizar(atualizados);
   };
 
-  return { feeds, isLoaded, loadFeeds, addFeed, toggleFeed, deleteFeed };
-}
+  const removeFeed = (id: string) => {
+    const atualizados = feeds.filter((item) => item.id !== id);
+    atualizarESincronizar(atualizados);
+  };
+
+  return {
+    feeds,
+    addFeed,
+    toggleFeed,
+    removeFeed,
+  };
+};

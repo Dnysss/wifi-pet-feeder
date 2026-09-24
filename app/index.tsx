@@ -1,6 +1,6 @@
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Modal,
@@ -13,40 +13,39 @@ import {
 } from "react-native";
 
 import { useFeeds } from "@/hooks/useFeeds";
-import { useFeedScheduler } from "@/hooks/useFeedScheduler";
 import { useMqtt } from "@/hooks/useMqtt";
 import { Feed } from "@/types/feed";
 import FeedCard from "../components/FeedCard";
 
 export default function WifiPetFeeder() {
   const params = useLocalSearchParams();
-  const { feeds, isLoaded, loadFeeds, addFeed, toggleFeed, deleteFeed } =
-    useFeeds();
-  const { status, isConnected, enviarComando } = useMqtt();
+  const { feeds, addFeed, toggleFeed, removeFeed } = useFeeds();
+  const { status, enviarComando } = useMqtt();
 
   const [manualFeedVisible, setManualFeedVisible] = useState(false);
   const [manualFeedTime, setManualFeedTime] = useState(5);
   const [selectedFeed, setSelectedFeed] = useState<Feed | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadFeeds();
-    }, [loadFeeds]),
-  );
-
+  //le parametros da rota quando um novo agendamento eh criado
   useEffect(() => {
-    if (params.newFeed && isLoaded) {
+    if (params.newFeed) {
       try {
-        const newFeedData = JSON.parse(params.newFeed as string);
+        const parsedData = JSON.parse(params.newFeed as string);
+        const newFeedData: Feed = {
+          id: parsedData.id || Date.now().toString(),
+          time: parsedData.time || "00:00",
+          portions: Number(parsedData.portions) || 5,
+          enabled: parsedData.enabled ?? true,
+          days: parsedData.days || "Todos os dias",
+        };
+
         addFeed(newFeedData);
         router.setParams({ newFeed: undefined });
       } catch (error) {
         console.error("Erro ao ler parâmetro:", error);
       }
     }
-  }, [params.newFeed, isLoaded]);
-
-  useFeedScheduler(feeds, isConnected, enviarComando, toggleFeed);
+  }, [params.newFeed]);
 
   const handleDeleteFeed = () => {
     if (!selectedFeed) return;
@@ -59,7 +58,7 @@ export default function WifiPetFeeder() {
           text: "Excluir",
           style: "destructive",
           onPress: () => {
-            deleteFeed(selectedFeed.id);
+            removeFeed(selectedFeed.id);
             setSelectedFeed(null);
           },
         },
@@ -117,7 +116,7 @@ export default function WifiPetFeeder() {
             <FeedCard
               key={feed.id}
               time={feed.time}
-              days={feed.days}
+              days={Array.isArray(feed.days) ? feed.days.join(", ") : feed.days}
               portions={feed.portions}
               enabled={feed.enabled}
               onToggle={() => toggleFeed(feed.id)}
@@ -201,9 +200,13 @@ export default function WifiPetFeeder() {
             {selectedFeed && (
               <>
                 <Text style={styles.modalInfo}>{selectedFeed.time}</Text>
-                <Text style={styles.modalSubtitle}>{selectedFeed.days}</Text>
                 <Text style={styles.modalSubtitle}>
-                  Feed: {selectedFeed.portions} segundos
+                  {Array.isArray(selectedFeed.days)
+                    ? selectedFeed.days.join(", ")
+                    : selectedFeed.days}
+                </Text>
+                <Text style={styles.modalSubtitle}>
+                  Duração: {selectedFeed.portions} segundos
                 </Text>
               </>
             )}

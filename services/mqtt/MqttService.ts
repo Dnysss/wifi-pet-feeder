@@ -1,5 +1,6 @@
 import mqtt, { MqttClient } from "mqtt";
 import { IMqttService } from "./IMqttService";
+import { Feed } from "../../types/feed";
 
 export class MqttService implements IMqttService {
   private static instance: MqttService;
@@ -12,6 +13,7 @@ export class MqttService implements IMqttService {
 
   public readonly TOPIC_COMANDO = "denys/alimentador/comando";
   public readonly TOPIC_STATUS = "denys/alimentador/status";
+  public readonly TOPIC_AGENDAMENTOS = "denys/alimentador/agendamentos";
 
   private constructor() {}
 
@@ -55,6 +57,25 @@ export class MqttService implements IMqttService {
   public enviarComando(segundos: number): void {
     if (this.client?.connected) {
       this.client.publish(this.TOPIC_COMANDO, segundos.toString());
+    }
+  }
+
+  public sincronizarAgendamentos(feeds: Feed[]): void {
+    if (this.client?.connected) {
+      // Mapeia para o formato JSON esperado pelo C++ no ESP32
+      const payloadFormatado = feeds.map((item) => ({
+        time: item.time,
+        portions: Number(item.portions),
+        enabled: item.enabled,
+        days: Array.isArray(item.days) ? item.days.join(", ") : item.days,
+      }));
+
+      const payloadJSON = JSON.stringify(payloadFormatado);
+
+      this.client.publish(this.TOPIC_AGENDAMENTOS, payloadJSON, { qos: 1 });
+      console.log("Agendamentos sincronizados com o ESP32:", payloadJSON);
+    } else {
+      console.warn("MQTT desconectado. Sincronização pendente.");
     }
   }
 
