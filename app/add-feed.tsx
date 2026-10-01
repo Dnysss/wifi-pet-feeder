@@ -58,8 +58,8 @@ export default function AddFeed() {
         newFeed: JSON.stringify({
           time: selectedTime,
           days: selectedDays,
-          daysText,
-          feedTime,
+          portions: feedTime,
+          enabled: true,
         }),
       },
     });
