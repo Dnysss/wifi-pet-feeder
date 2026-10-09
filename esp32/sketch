@@ -84,6 +84,7 @@ void verificarAgendamentosLocais();
 void salvarAgendamentosNoFlash(const String& jsonPayload);
 void carregarAgendamentosDoFlash();
 void processarJSONAgendamentos(const String& jsonPayload);
+void publicarAgendamentosDoFlash();
 
 void setup() {
  Serial.begin(115200);
@@ -199,11 +200,14 @@ void conectarMQTT() {
 
      mqttClient.subscribe(MQTT_TOPIC_COMANDO);
      mqttClient.subscribe(MQTT_TOPIC_AGENDAMENTOS);
+     mqttClient.subscribe(MQTT_TOPIC_SOLICITAR_AGENDAMENTOS);
     
      Serial.print("Inscrito em: ");
      Serial.println(MQTT_TOPIC_COMANDO);
      Serial.print("Inscrito em: ");
      Serial.println(MQTT_TOPIC_AGENDAMENTOS);
+     Serial.print("Inscrito em: ");
+     Serial.println(MQTT_TOPIC_SOLICITAR_AGENDAMENTOS);
 
 
      publicarStatus("online");
@@ -251,10 +255,18 @@ void mensagemRecebida(char* topic, byte* payload, unsigned int length) {
  }
  //TOPICO DE LISTA DE AGENDAMENTOS
  else if (String(topic) == MQTT_TOPIC_AGENDAMENTOS) {
+  Serial.println("Recebendo novos agendamentos...");
    salvarAgendamentosNoFlash(mensagem);
    processarJSONAgendamentos(mensagem);
+
+   Serial.println("Conferindo o que foi salvo na Flash:");
+   publicarAgendamentosDoFlash();
  }
 
+ else if (String(topic) == MQTT_TOPIC_SOLICITAR_AGENDAMENTOS) {
+    Serial.println("Solicitação de agendamentos recebida.");
+    publicarAgendamentosDoFlash();
+  }
 
  Serial.println("================================");
 }
@@ -366,4 +378,25 @@ void verificarAgendamentosLocais() {
      }
    }
  }
+}
+
+void publicarAgendamentosDoFlash() {
+  preferences.begin("feeder", true);
+  String json = preferences.getString("schedules", "[]");
+  preferences.end();
+
+  Serial.println("Agendamentos lidos da Flash:");
+  Serial.println(json);
+
+  if (mqttClient.connected()) {
+    bool enviado = mqttClient.publish(
+      MQTT_TOPIC_RESPOSTA_AGENDAMENTOS,
+      json.c_str()
+    );
+
+    Serial.println(
+      enviado ? "Resposta enviada ao app."
+              : "Falha ao enviar resposta."
+    );
+  }
 }

@@ -1,4 +1,10 @@
-import { createContext, useContext, useState, ReactNode } from "react";
+import {
+  createContext,
+  ReactNode,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 
 import { MqttService } from "@/services/mqtt/MqttService";
 import { Feed } from "@/types/feed";
@@ -38,9 +44,7 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
   const toggleFeed = (id: string) => {
     const atualizados = feeds.map((item) =>
-      item.id === id
-        ? { ...item, enabled: !item.enabled }
-        : item,
+      item.id === id ? { ...item, enabled: !item.enabled } : item,
     );
 
     atualizarESincronizar(atualizados);
@@ -51,6 +55,17 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
     atualizarESincronizar(atualizados);
   };
+
+  useEffect(() => {
+    const unsubscribe = mqttService.inscreverAgendamentos((feedsRecebidos) => {
+      setFeeds(feedsRecebidos);
+      console.log("Lista atualizada com dados do ESP32:", feedsRecebidos);
+    });
+
+    mqttService.conectar();
+
+    return unsubscribe;
+  }, []);
 
   return (
     <FeedsContext.Provider
