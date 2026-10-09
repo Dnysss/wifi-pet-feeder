@@ -24,6 +24,8 @@ const char* MQTT_PASSWORD = "";
 const char* MQTT_TOPIC_COMANDO      = "denys/alimentador/comando";
 const char* MQTT_TOPIC_STATUS       = "denys/alimentador/status";
 const char* MQTT_TOPIC_AGENDAMENTOS = "denys/alimentador/agendamentos";
+const char* MQTT_TOPIC_SOLICITAR_AGENDAMENTOS = "denys/alimentador/agendamentos/solicitar";
+const char* MQTT_TOPIC_RESPOSTA_AGENDAMENTOS = "denys/alimentador/agendamentos/resposta";
 
 
 //CERTIFICADO TLS 
