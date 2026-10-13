@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { Snackbar } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -25,6 +26,7 @@ const DAYS = [
 ];
 
 export default function AddFeed() {
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
   const params = useLocalSearchParams();
 
   const [hour, setHour] = useState(8);
@@ -45,6 +47,10 @@ export default function AddFeed() {
   };
 
   const handleSave = () => {
+    if (selectedDays.length === 0) {
+      setSnackbarVisible(true);
+      return;
+    }
     const selectedTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 
     router.replace({
@@ -238,6 +244,17 @@ export default function AddFeed() {
           </View>
         </View>
       </Modal>
+      <Snackbar
+        visible={snackbarVisible}
+        onDismiss={() => setSnackbarVisible(false)}
+        duration={3000}
+        action={{
+          label: "OK",
+          onPress: () => setSnackbarVisible(false),
+        }}
+      >
+        Selecione pelo menos um dia da semana para agendar a alimentação.
+      </Snackbar>
     </SafeAreaView>
   );
 }
