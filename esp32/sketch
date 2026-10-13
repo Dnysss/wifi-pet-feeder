@@ -336,8 +336,14 @@ void processarJSONAgendamentos(const String& jsonPayload) {
    schedules[scheduleCount].enabled = obj["enabled"] | true;
 
 
-   String daysStr = obj["days"] | "Apenas uma vez";
-   strncpy(schedules[scheduleCount].days, daysStr.c_str(), sizeof(schedules[scheduleCount].days) - 1);
+   String daysStr = obj["days"] | "";
+  strncpy(
+    schedules[scheduleCount].days,
+    daysStr.c_str(),
+    sizeof(schedules[scheduleCount].days) - 1
+  );
+
+schedules[scheduleCount].days[sizeof(schedules[scheduleCount].days) - 1] = '\0';
 
 
    scheduleCount++;
@@ -369,7 +375,7 @@ void verificarAgendamentosLocais() {
 
 
      bool deveExecutar = false;
-     if (diasStr.indexOf("apenas uma vez") != -1 || diasStr.indexOf("todos os dias") != -1 || diasStr.indexOf(hojeNome) != -1) {
+     if (diasStr.indexOf("todos os dias") != -1 || diasStr.indexOf(hojeNome) != -1) {
        deveExecutar = true;
      }
 

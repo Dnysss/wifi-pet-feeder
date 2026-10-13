@@ -1,9 +1,8 @@
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
-
 
 const DAYS = [
   {
@@ -49,10 +48,6 @@ export default function Repeat() {
     });
   }
 
-  function selectOnlyOnce() {
-    setSelectedDays([]);
-  }
-
   function handleBack() {
     router.back();
   }
@@ -81,21 +76,6 @@ export default function Repeat() {
 
         <View style={styles.headerSpace} />
       </View>
-
-      <Pressable style={styles.row} onPress={selectOnlyOnce}>
-        <Text
-          style={[
-            styles.dayText,
-            selectedDays.length === 0 && styles.selectedText,
-          ]}
-        >
-          Apenas uma vez
-        </Text>
-
-        {selectedDays.length === 0 && (
-          <Ionicons name="checkmark" size={22} color="#00CFA5" />
-        )}
-      </Pressable>
 
       {DAYS.map((day) => {
         const selected = selectedDays.includes(day.id);

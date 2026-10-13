@@ -38,7 +38,7 @@ export default function AddFeed() {
     : [];
 
   const getRepeatText = () => {
-    if (selectedDays.length === 0) return "Apenas uma vez";
+    if (selectedDays.length === 0) return "Selecionar dias";
     return DAYS.filter((d) => selectedDays.includes(d.id))
       .map((d) => d.label)
       .join(", ");
@@ -46,11 +46,6 @@ export default function AddFeed() {
 
   const handleSave = () => {
     const selectedTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-    const selectedLabels = DAYS.filter((d) => selectedDays.includes(d.id)).map(
-      (d) => d.label,
-    );
-    const daysText =
-      selectedDays.length === 0 ? "Apenas uma vez" : selectedLabels.join(", ");
 
     router.replace({
       pathname: "/",
