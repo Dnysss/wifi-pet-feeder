@@ -20,7 +20,7 @@ import FeedCard from "../components/FeedCard";
 export default function WifiPetFeeder() {
   const params = useLocalSearchParams();
   const { feeds, addFeed, toggleFeed, removeFeed } = useFeeds();
-  const { status, enviarComando } = useMqtt();
+  const { status, enviarComando, presenca } = useMqtt();
 
   const [manualFeedVisible, setManualFeedVisible] = useState(false);
   const [manualFeedTime, setManualFeedTime] = useState(5);
@@ -93,16 +93,21 @@ export default function WifiPetFeeder() {
         <View
           style={[
             styles.statusIndicator,
-            status === "alimentando" && styles.statusAlimentando,
-            status === "desconectado" && styles.statusDesconectado,
+            presenca === "online" &&
+              status === "alimentando" &&
+              styles.statusAlimentando,
+            presenca !== "online" && styles.statusDesconectado,
           ]}
         />
+
         <Text style={styles.statusText}>
-          {status === "alimentando"
-            ? "Alimentando..."
-            : status === "desconectado"
-              ? "Alimentador desconectado"
-              : "Alimentador pronto"}
+          {presenca === "offline"
+            ? "Alimentador desconectado"
+            : presenca === "desconhecido"
+              ? "Verificando conexão..."
+              : status === "alimentando"
+                ? "Alimentando..."
+                : "Alimentador pronto"}
         </Text>
       </View>
 

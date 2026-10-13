@@ -26,6 +26,7 @@ const char* MQTT_TOPIC_STATUS       = "denys/alimentador/status";
 const char* MQTT_TOPIC_AGENDAMENTOS = "denys/alimentador/agendamentos";
 const char* MQTT_TOPIC_SOLICITAR_AGENDAMENTOS = "denys/alimentador/agendamentos/solicitar";
 const char* MQTT_TOPIC_RESPOSTA_AGENDAMENTOS = "denys/alimentador/agendamentos/resposta";
+const char* MQTT_TOPIC_PRESENCA = "denys/alimentador/presenca";
 
 
 //CERTIFICADO TLS 
@@ -108,6 +109,8 @@ void setup() {
  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
  mqttClient.setCallback(mensagemRecebida);
 
+ //intervalo de keepalive MQTT
+  mqttClient.setKeepAlive(5);
 
 //Carrega agendamentos gravados na memoria flash NVS
  carregarAgendamentosDoFlash();
@@ -194,11 +197,13 @@ void conectarMQTT() {
    String clientId = "ESP32-Alimentador-" + String((uint32_t)ESP.getEfuseMac(), HEX);
 
 
-   if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD)) {
+   if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD, MQTT_TOPIC_PRESENCA, 1, true, "offline")) {
      Serial.println("================================");
      Serial.println("MQTT CONECTADO COM TLS!");
      Serial.println("================================");
 
+     //informa que o ESP32 esta online
+     mqttClient.publish(MQTT_TOPIC_PRESENCA, "online", true);
 
      mqttClient.subscribe(MQTT_TOPIC_COMANDO);
      mqttClient.subscribe(MQTT_TOPIC_AGENDAMENTOS);

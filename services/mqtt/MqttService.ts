@@ -13,6 +13,8 @@ export class MqttService implements IMqttService {
 
   private ultimoFeedRecebido: Feed[] | null = null;
 
+  private ultimaPresenca: string | null = null;
+
   private readonly broker = process.env.EXPO_PUBLIC_MQTT_BROKER!;
   private readonly username = process.env.EXPO_PUBLIC_MQTT_USERNAME!;
   private readonly password = process.env.EXPO_PUBLIC_MQTT_PASSWORD!;
@@ -26,6 +28,10 @@ export class MqttService implements IMqttService {
 
   public readonly TOPIC_RESPOSTA_AGENDAMENTOS =
     "denys/alimentador/agendamentos/resposta";
+
+  public readonly TOPIC_PRESENCA = "denys/alimentador/presenca";
+  //conjunto de listeners especifico para presenca
+  private presencaListeners = new Set<(status: string) => void>();
 
   private constructor() {}
 
@@ -60,7 +66,11 @@ export class MqttService implements IMqttService {
       console.log("MQTT conectado!");
 
       this.client?.subscribe(
-        [this.TOPIC_STATUS, this.TOPIC_RESPOSTA_AGENDAMENTOS],
+        [
+          this.TOPIC_STATUS,
+          this.TOPIC_RESPOSTA_AGENDAMENTOS,
+          this.TOPIC_PRESENCA,
+        ],
         (error) => {
           if (error) {
             console.error("Erro ao assinar tópicos MQTT:", error);
@@ -69,7 +79,6 @@ export class MqttService implements IMqttService {
 
           console.log("Inscrito no tópico de status e de resposta.");
 
-          // Solicita a lista somente após assinar a resposta.
           this.solicitarAgendamentos();
         },
       );
@@ -85,9 +94,16 @@ export class MqttService implements IMqttService {
       if (topic === this.TOPIC_RESPOSTA_AGENDAMENTOS) {
         this.receberAgendamentos(conteudo);
       }
+
+      if (topic === this.TOPIC_PRESENCA) {
+        this.ultimaPresenca = conteudo;
+
+        this.presencaListeners.forEach((listener) => listener(conteudo));
+      }
     });
 
     this.client.on("close", () => {
+      this.ultimaPresenca = null;
       this.statusListeners.forEach((listener) => listener("desconectado"));
     });
 
@@ -156,7 +172,6 @@ export class MqttService implements IMqttService {
   public inscreverAgendamentos(listener: (feeds: Feed[]) => void): () => void {
     this.feedListeners.add(listener);
 
-    // Entrega os dados já recebidos, caso o listener chegue depois.
     if (this.ultimoFeedRecebido !== null) {
       listener(this.ultimoFeedRecebido);
     }
@@ -214,5 +229,17 @@ export class MqttService implements IMqttService {
       this.client.end();
       this.client = null;
     }
+  }
+
+  public inscreverPresenca(listener: (status: string) => void): () => void {
+    this.presencaListeners.add(listener);
+
+    if (this.ultimaPresenca !== null) {
+      listener(this.ultimaPresenca);
+    }
+
+    return () => {
+      this.presencaListeners.delete(listener);
+    };
   }
 }
