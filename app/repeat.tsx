@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -37,6 +37,7 @@ const DAYS = [
 
 export default function Repeat() {
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
+  const params = useLocalSearchParams();
 
   function toggleDay(dayId: string) {
     setSelectedDays((currentDays) => {
@@ -59,6 +60,8 @@ export default function Repeat() {
       pathname: "/add-feed",
       params: {
         days: JSON.stringify(selectedDays),
+        hour: String(params.hour ?? 8),
+        minute: String(params.minute ?? 0),
       },
     });
   }

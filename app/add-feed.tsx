@@ -29,8 +29,10 @@ export default function AddFeed() {
   const [snackbarVisible, setSnackbarVisible] = useState(false);
   const params = useLocalSearchParams();
 
-  const [hour, setHour] = useState(8);
-  const [minute, setMinute] = useState(0);
+  const [hour, setHour] = useState(params.hour ? Number(params.hour) : 8);
+  const [minute, setMinute] = useState(
+    params.minute ? Number(params.minute) : 0,
+  );
   const [feedVisible, setFeedVisible] = useState(false);
   const [feedTime, setFeedTime] = useState(5);
   const [tempFeedTime, setTempFeedTime] = useState(5);
@@ -154,7 +156,18 @@ export default function AddFeed() {
         </View>
       </View>
 
-      <Pressable style={styles.option} onPress={() => router.push("/repeat")}>
+      <Pressable
+        style={styles.option}
+        onPress={() =>
+          router.push({
+            pathname: "/repeat",
+            params: {
+              hour: String(hour),
+              minute: String(minute),
+            },
+          })
+        }
+      >
         <Text style={styles.optionTitle}>Repetir</Text>
         <View style={styles.optionRight}>
           <Text style={styles.optionValue} numberOfLines={1}>
