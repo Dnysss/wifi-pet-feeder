@@ -43,6 +43,8 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
   };
 
   const toggleFeed = (id: string) => {
+    if (!verificarConexao()) return;
+
     const atualizados = feeds.map((item) =>
       item.id === id ? { ...item, enabled: !item.enabled } : item,
     );
@@ -51,6 +53,8 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
   };
 
   const removeFeed = (id: string) => {
+    if (!verificarConexao()) return;
+
     const atualizados = feeds.filter((item) => item.id !== id);
 
     atualizarESincronizar(atualizados);
@@ -64,8 +68,22 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
     mqttService.conectar();
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+    };
   }, []);
+
+  const verificarConexao = () => {
+    if (!mqttService.espEstaOnline()) {
+      console.warn(
+        "Operação bloqueada: ESP32 offline ou conexão MQTT indisponível.",
+      );
+
+      return false;
+    }
+
+    return true;
+  };
 
   return (
     <FeedsContext.Provider

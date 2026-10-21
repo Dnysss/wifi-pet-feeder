@@ -30,6 +30,8 @@ export class MqttService implements IMqttService {
     "denys/alimentador/agendamentos/resposta";
 
   public readonly TOPIC_PRESENCA = "denys/alimentador/presenca";
+
+  public readonly TOPIC_ACK_AGENDAMENTOS = "denys/alimentador/agendamentos/ack";
   //conjunto de listeners especifico para presenca
   private presencaListeners = new Set<(status: string) => void>();
 
@@ -70,6 +72,7 @@ export class MqttService implements IMqttService {
           this.TOPIC_STATUS,
           this.TOPIC_RESPOSTA_AGENDAMENTOS,
           this.TOPIC_PRESENCA,
+          this.TOPIC_ACK_AGENDAMENTOS,
         ],
         (error) => {
           if (error) {
@@ -86,6 +89,8 @@ export class MqttService implements IMqttService {
 
     this.client.on("message", (topic, message) => {
       const conteudo = message.toString();
+
+      console.log("MQTT RECEBIDO:", topic, message.toString());
 
       if (topic === this.TOPIC_STATUS) {
         this.statusListeners.forEach((listener) => listener(conteudo));
@@ -104,7 +109,14 @@ export class MqttService implements IMqttService {
 
     this.client.on("close", () => {
       this.ultimaPresenca = null;
-      this.statusListeners.forEach((listener) => listener("desconectado"));
+
+      this.presencaListeners.forEach((listener) => {
+        listener("desconhecido");
+      });
+
+      this.statusListeners.forEach((listener) => {
+        listener("desconectado");
+      });
     });
 
     this.client.on("error", (error) => {
@@ -199,10 +211,7 @@ export class MqttService implements IMqttService {
       time: item.time,
       portions: Number(item.portions),
       enabled: item.enabled,
-      days:
-        Array.isArray(item.days) && item.days.length > 0
-          ? item.days.join(", ")
-          : "Apenas uma vez",
+      days: Array.isArray(item.days) ? item.days.join(", ") : "",
     }));
 
     const payloadJSON = JSON.stringify(payloadFormatado);
@@ -210,6 +219,10 @@ export class MqttService implements IMqttService {
     this.client.publish(this.TOPIC_AGENDAMENTOS, payloadJSON, { qos: 1 });
 
     console.log("Agendamentos enviados ao ESP32:", payloadJSON);
+  }
+
+  public espEstaOnline(): boolean {
+    return this.client?.connected === true && this.ultimaPresenca === "online";
   }
 
   public estaConectado(): boolean {

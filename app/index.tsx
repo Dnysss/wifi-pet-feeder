@@ -14,6 +14,7 @@ import {
 
 import { useFeeds } from "@/hooks/useFeeds";
 import { useMqtt } from "@/hooks/useMqtt";
+import { MqttService } from "@/services/mqtt/MqttService";
 import { Feed } from "@/types/feed";
 import FeedCard from "../components/FeedCard";
 
@@ -26,6 +27,22 @@ export default function WifiPetFeeder() {
   const [manualFeedTime, setManualFeedTime] = useState(5);
   const [selectedFeed, setSelectedFeed] = useState<Feed | null>(null);
 
+  const alimentadorOnline = presenca === "online";
+  const mqttService = MqttService.getInstance();
+
+  const verificarConexao = () => {
+    if (!mqttService.espEstaOnline()) {
+      Alert.alert(
+        "Alimentador desconectado",
+        "Conecte o alimentador à internet para gerenciar os agendamentos.",
+      );
+
+      return false;
+    }
+
+    return true;
+  };
+
   //le parametros da rota quando um novo agendamento eh criado
   useEffect(() => {
     if (params.newFeed) {
@@ -36,8 +53,18 @@ export default function WifiPetFeeder() {
           time: parsedData.time || "00:00",
           portions: Number(parsedData.portions) || 5,
           enabled: parsedData.enabled ?? true,
-          days: parsedData.days || "Todos os dias",
+          days: Array.isArray(parsedData.days) ? parsedData.days : [],
         };
+
+        if (!mqttService.espEstaOnline()) {
+          Alert.alert(
+            "Alimentador desconectado",
+            "Não foi possível salvar o agendamento porque o alimentador está offline.",
+          );
+
+          router.setParams({ newFeed: undefined });
+          return;
+        }
 
         addFeed(newFeedData);
         router.setParams({ newFeed: undefined });
@@ -45,10 +72,12 @@ export default function WifiPetFeeder() {
         console.error("Erro ao ler parâmetro:", error);
       }
     }
-  }, [params.newFeed]);
+  }, [params.newFeed, alimentadorOnline, addFeed]);
 
   const handleDeleteFeed = () => {
     if (!selectedFeed) return;
+    if (!verificarConexao()) return;
+
     Alert.alert(
       "Excluir programação",
       `Deseja excluir a programação das ${selectedFeed.time}?`,
@@ -58,6 +87,8 @@ export default function WifiPetFeeder() {
           text: "Excluir",
           style: "destructive",
           onPress: () => {
+            if (!verificarConexao()) return;
+
             removeFeed(selectedFeed.id);
             setSelectedFeed(null);
           },
@@ -124,7 +155,11 @@ export default function WifiPetFeeder() {
               days={Array.isArray(feed.days) ? feed.days.join(", ") : feed.days}
               portions={feed.portions}
               enabled={feed.enabled}
-              onToggle={() => toggleFeed(feed.id)}
+              onToggle={() => {
+                if (!verificarConexao()) return;
+
+                toggleFeed(feed.id);
+              }}
               onPress={() => setSelectedFeed(feed)}
             />
           ))}
@@ -132,7 +167,11 @@ export default function WifiPetFeeder() {
 
         <Pressable
           style={styles.addButton}
-          onPress={() => router.push("/add-feed")}
+          onPress={() => {
+            if (!verificarConexao()) return;
+
+            router.push("/add-feed");
+          }}
         >
           <Ionicons name="add" size={28} color="#FFFFFF" />
         </Pressable>
@@ -218,7 +257,13 @@ export default function WifiPetFeeder() {
             <View style={styles.modalButtons}>
               <Pressable
                 style={styles.editButton}
-                onPress={() => setSelectedFeed(null)}
+                onPress={() => {
+                  if (!verificarConexao()) return;
+
+                  setSelectedFeed(null);
+
+                  //futuramente tela de edicao
+                }}
               >
                 <Text style={styles.editButtonText}>Editar</Text>
               </Pressable>
