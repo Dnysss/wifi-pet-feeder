@@ -15,6 +15,17 @@ export class MqttService implements IMqttService {
 
   private ultimaPresenca: string | null = null;
 
+  private revisaoCarregada = false;
+
+  private ackPendente: {
+    requestId: string;
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  } | null = null;
+
+  private revision = 0;
+
   private readonly broker = process.env.EXPO_PUBLIC_MQTT_BROKER!;
   private readonly username = process.env.EXPO_PUBLIC_MQTT_USERNAME!;
   private readonly password = process.env.EXPO_PUBLIC_MQTT_PASSWORD!;
@@ -105,6 +116,10 @@ export class MqttService implements IMqttService {
 
         this.presencaListeners.forEach((listener) => listener(conteudo));
       }
+
+      if (topic === this.TOPIC_ACK_AGENDAMENTOS) {
+        this.receberAckAgendamentos(conteudo);
+      }
     });
 
     this.client.on("close", () => {
@@ -117,6 +132,18 @@ export class MqttService implements IMqttService {
       this.statusListeners.forEach((listener) => {
         listener("desconectado");
       });
+
+      this.revisaoCarregada = false;
+
+      if (this.ackPendente) {
+        const pendente = this.ackPendente;
+        this.ackPendente = null;
+        clearTimeout(pendente.timeout);
+
+        pendente.reject(
+          new Error("Conexão MQTT perdida durante o salvamento."),
+        );
+      }
     });
 
     this.client.on("error", (error) => {
@@ -124,25 +151,63 @@ export class MqttService implements IMqttService {
     });
   }
 
+  private receberAckAgendamentos(payload: string): void {
+    try {
+      const ack = JSON.parse(payload);
+
+      if (!this.ackPendente) return;
+
+      if (ack.requestId !== this.ackPendente.requestId) {
+        console.warn("ACK ignorado: requestId diferente.");
+        return;
+      }
+
+      const pendente = this.ackPendente;
+
+      clearTimeout(pendente.timeout);
+      this.ackPendente = null;
+
+      if (ack.status === "saved" && ack.revision === this.revision + 1) {
+        console.log("ESP32 confirmou o salvamento:", ack.requestId);
+        pendente.resolve();
+      } else {
+        pendente.reject(
+          new Error(ack.message ?? "ESP32 rejeitou os agendamentos."),
+        );
+      }
+    } catch (error) {
+      console.error("Erro ao interpretar ACK:", error);
+    }
+  }
+
   private receberAgendamentos(payload: string): void {
     try {
       const dados = JSON.parse(payload);
 
-      if (!Array.isArray(dados)) {
-        console.error("A resposta MQTT não é uma lista.");
+      // Novo formato enviado pelo ESP32
+      if (
+        !dados ||
+        Array.isArray(dados) ||
+        !Array.isArray(dados.feeds) ||
+        !Number.isSafeInteger(dados.revision) ||
+        dados.revision < 0
+      ) {
+        console.error("Resposta de agendamentos inválida.");
         return;
       }
 
-      const feeds: Feed[] = dados.map((item: any, index: number) => {
+      // Não sobrescrever a lista durante uma gravação pendente
+      if (this.ackPendente) {
+        console.log("Resposta recebida durante gravação. Aguardando ACK.");
+        return;
+      }
+
+      const feeds: Feed[] = dados.feeds.map((item: any, index: number) => {
         let days: string[] = [];
 
         if (Array.isArray(item.days)) {
           days = item.days;
-        } else if (
-          typeof item.days === "string" &&
-          item.days.trim() !== "" &&
-          !item.days.toLowerCase().includes("apenas uma vez")
-        ) {
+        } else if (typeof item.days === "string") {
           days = item.days
             .split(",")
             .map((dia: string) => dia.trim())
@@ -158,13 +223,16 @@ export class MqttService implements IMqttService {
         };
       });
 
+      this.revision = dados.revision;
+      this.revisaoCarregada = true;
       this.ultimoFeedRecebido = feeds;
 
-      console.log("Agendamentos recuperados do ESP32:", feeds);
+      console.log("Revisão recebida:", this.revision);
+      console.log("Agendamentos recuperados:", feeds);
 
       this.feedListeners.forEach((listener) => listener(feeds));
     } catch (error) {
-      console.error("Erro ao interpretar agendamentos recebidos:", error);
+      console.error("Erro ao interpretar agendamentos:", error);
     }
   }
 
@@ -201,24 +269,69 @@ export class MqttService implements IMqttService {
     }
   }
 
-  public sincronizarAgendamentos(feeds: Feed[]): void {
-    if (!this.client?.connected) {
-      console.warn("MQTT desconectado. Sincronização não realizada.");
-      return;
-    }
+  public sincronizarAgendamentos(feeds: Feed[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.espEstaOnline()) {
+        reject(new Error("ESP32 desconectado."));
+        return;
+      }
 
-    const payloadFormatado = feeds.map((item) => ({
-      time: item.time,
-      portions: Number(item.portions),
-      enabled: item.enabled,
-      days: Array.isArray(item.days) ? item.days.join(", ") : "",
-    }));
+      if (!this.revisaoCarregada) {
+        reject(new Error("Aguardando agendamentos do ESP32."));
+        return;
+      }
 
-    const payloadJSON = JSON.stringify(payloadFormatado);
+      if (this.ackPendente) {
+        reject(new Error("Já existe uma sincronização em andamento."));
+        return;
+      }
 
-    this.client.publish(this.TOPIC_AGENDAMENTOS, payloadJSON, { qos: 1 });
+      const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const revision = this.revision + 1;
 
-    console.log("Agendamentos enviados ao ESP32:", payloadJSON);
+      const payload = {
+        requestId,
+        revision,
+        feeds: feeds.map((item) => ({
+          time: item.time,
+          portions: Number(item.portions),
+          enabled: item.enabled,
+          days: Array.isArray(item.days) ? item.days.join(", ") : "",
+        })),
+      };
+
+      const timeout = setTimeout(() => {
+        if (this.ackPendente?.requestId !== requestId) return;
+
+        this.ackPendente = null;
+
+        reject(new Error("Tempo esgotado aguardando confirmação do ESP32."));
+        this.solicitarAgendamentos();
+      }, 10000);
+
+      this.ackPendente = {
+        requestId,
+        resolve: () => {
+          this.revision = revision;
+          resolve();
+        },
+        reject,
+        timeout,
+      };
+
+      this.client!.publish(
+        this.TOPIC_AGENDAMENTOS,
+        JSON.stringify(payload),
+        { qos: 1, retain: false },
+        (error) => {
+          if (error && this.ackPendente?.requestId === requestId) {
+            clearTimeout(timeout);
+            this.ackPendente = null;
+            reject(error);
+          }
+        },
+      );
+    });
   }
 
   public espEstaOnline(): boolean {

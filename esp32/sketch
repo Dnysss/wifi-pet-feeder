@@ -27,6 +27,7 @@ const char* MQTT_TOPIC_AGENDAMENTOS = "denys/alimentador/agendamentos";
 const char* MQTT_TOPIC_SOLICITAR_AGENDAMENTOS = "denys/alimentador/agendamentos/solicitar";
 const char* MQTT_TOPIC_RESPOSTA_AGENDAMENTOS = "denys/alimentador/agendamentos/resposta";
 const char* MQTT_TOPIC_PRESENCA = "denys/alimentador/presenca";
+const char* MQTT_TOPIC_ACK_AGENDAMENTOS = "denys/alimentador/agendamentos/ack";
 
 
 //CERTIFICADO TLS 
@@ -70,6 +71,8 @@ struct FeedSchedule {
 #define MAX_SCHEDULES 15
 FeedSchedule schedules[MAX_SCHEDULES];
 int scheduleCount = 0;
+uint32_t revisionAtual = 0;
+String ultimoRequestId = "";
 
 Preferences preferences;
 WiFiClientSecure espClient;
@@ -88,6 +91,17 @@ bool salvarAgendamentosNoFlash(const String& jsonPayload);
 void carregarAgendamentosDoFlash();
 void processarJSONAgendamentos(const String& jsonPayload);
 void publicarAgendamentosDoFlash();
+void publicarAckAgendamentos(
+  const String& requestId,
+  unsigned long revision,
+  const char* status
+);
+bool migrarAgendamentosAntigos();
+bool salvarRegistroAgendamentos(
+  const String& requestId,
+  uint32_t revision,
+  const String& feedsJSON
+);
 
 void setup() {
  Serial.begin(115200);
@@ -115,6 +129,7 @@ void setup() {
 //Carrega agendamentos gravados na memoria flash NVS
  carregarAgendamentosDoFlash();
 
+ mqttClient.setBufferSize(2048);
 
  conectarMQTT();
 }
@@ -227,6 +242,38 @@ void conectarMQTT() {
  }
 }
 
+void publicarAckAgendamentos(
+  const String& requestId,
+  unsigned long revision,
+  const char* status
+) {
+  JsonDocument doc;
+
+  doc["requestId"] = requestId;
+  doc["revision"] = revision;
+  doc["status"] = status;
+
+  String resposta;
+  serializeJson(doc, resposta);
+
+  if (!mqttClient.connected()) {
+    Serial.println("Não foi possível publicar ACK: MQTT desconectado.");
+    return;
+  }
+
+  bool enviado = mqttClient.publish(
+    MQTT_TOPIC_ACK_AGENDAMENTOS,
+    resposta.c_str()
+  );
+
+  if (enviado) {
+    Serial.println("ACK publicado:");
+    Serial.println(resposta);
+  } else {
+    Serial.println("Falha ao publicar ACK.");
+  }
+}
+
 void mensagemRecebida(char* topic, byte* payload, unsigned int length) {
   String mensagem = "";
 
@@ -239,59 +286,103 @@ void mensagemRecebida(char* topic, byte* payload, unsigned int length) {
   String topicoRecebido = String(topic);
 
   Serial.println("\n================================");
-  Serial.print("Tópico: ");
+  Serial.print("Topico: ");
   Serial.println(topicoRecebido);
-  Serial.print("Conteúdo: ");
+  Serial.print("Conteudo: ");
   Serial.println(mensagem);
 
-  //TOPICO DE COMANDO MANUAL
   if (topicoRecebido == MQTT_TOPIC_COMANDO) {
-
     if (mensagem == "0") {
       motorLigado = false;
       motor.disableOutputs();
-
-      Serial.println("Motor parado manualmente.");
       publicarStatus("parado");
-
     } else {
       unsigned long segundos = mensagem.toInt();
 
       if (segundos > 0) {
         acionarMotorPorSegundos(segundos);
       } else {
-        Serial.println("Comando inválido.");
         publicarStatus("erro_comando");
       }
     }
   }
 
-  //TOPICO DE LISTA DE AGENDAMENTOS
   else if (topicoRecebido == MQTT_TOPIC_AGENDAMENTOS) {
+    JsonDocument doc;
 
-    Serial.println("Recebendo novos agendamentos...");
+    DeserializationError erro = deserializeJson(doc, mensagem);
 
-    if (!salvarAgendamentosNoFlash(mensagem)) {
-      Serial.println("Agendamentos rejeitados. Lista anterior preservada.");
+    if (erro || !doc.is<JsonObject>()) {
+      Serial.println("ERRO: Formato MQTT invalido.");
+      return;
+    }
+
+    if (!doc["requestId"].is<const char*>() ||
+        !doc["revision"].is<uint32_t>() ||
+        !doc["feeds"].is<JsonArray>()) {
+      Serial.println("ERRO: Campos obrigatorios invalidos.");
+      return;
+    }
+
+    String requestId = doc["requestId"].as<String>();
+    uint32_t revision = doc["revision"].as<uint32_t>();
+
+    if (requestId.isEmpty() || requestId.length() > 80) {
+      Serial.println("ERRO: requestId invalido.");
+      return;
+    }
+
+    String feedsJSON;
+    serializeJson(doc["feeds"], feedsJSON);
+
+    // Mesma operacao recebida novamente
+    if (revision == revisionAtual &&
+        requestId == ultimoRequestId) {
+      Serial.println("Operacao ja salva. Reenviando ACK.");
+      publicarAckAgendamentos(requestId, revision, "saved");
+      return;
+    }
+
+    // Somente a proxima revisao pode ser gravada
+    if (revision <= revisionAtual ||
+        revision != revisionAtual + 1) {
+      Serial.println("ERRO: Revisao desatualizada ou inesperada.");
+      publicarAckAgendamentos(requestId, revision, "rejected");
+      publicarAgendamentosDoFlash();
+      return;
+    }
+
+    if (!validarAgendamentos(feedsJSON)) {
+      Serial.println("ERRO: Lista rejeitada.");
+      publicarAckAgendamentos(requestId, revision, "rejected");
+      return;
+    }
+
+    if (!salvarRegistroAgendamentos(
+          requestId,
+          revision,
+          feedsJSON
+        )) {
+      Serial.println("ERRO: Falha ao salvar na NVS.");
+      publicarAckAgendamentos(requestId, revision, "rejected");
       return;
     }
 
     carregarAgendamentosDoFlash();
 
-    Serial.println("Conferindo o que foi salvo na Flash:");
-    publicarAgendamentosDoFlash();
+    publicarAckAgendamentos(requestId, revision, "saved");
+
+    Serial.println("Agendamentos salvos e confirmados.");
   }
 
-  //TOPICO DE SOLICITACAO DE AGENDAMENTOS
   else if (topicoRecebido == MQTT_TOPIC_SOLICITAR_AGENDAMENTOS) {
-
-    Serial.println("Solicitação de agendamentos recebida.");
-
+    Serial.println("Solicitacao de agendamentos recebida.");
     publicarAgendamentosDoFlash();
   }
 
   Serial.println("================================");
 }
+
  //TOPICO DE LISTA DE AGENDAMENTOS
  else if (String(topic) == MQTT_TOPIC_AGENDAMENTOS) {
   Serial.println("Recebendo novos agendamentos...");
@@ -335,14 +426,13 @@ void acionarMotorPorSegundos(unsigned long segundos) {
 
 
 //MEMORIA FLASH SINCRO AGENDAMENTOS
-
-bool salvarAgendamentosNoFlash(const String& jsonPayload) {
+bool validarAgendamentos(const String& jsonPayload) {
   JsonDocument doc;
 
   DeserializationError error = deserializeJson(doc, jsonPayload);
 
   if (error || !doc.is<JsonArray>()) {
-    Serial.println("ERRO: JSON de agendamentos inválido.");
+    Serial.println("ERRO: JSON de agendamentos invalido.");
     return false;
   }
 
@@ -359,34 +449,40 @@ bool salvarAgendamentosNoFlash(const String& jsonPayload) {
 
   for (JsonVariant item : array) {
     if (!item.is<JsonObject>()) {
-      Serial.println("ERRO: Agendamento não é um objeto.");
+      Serial.println("ERRO: Agendamento nao e um objeto.");
       return false;
     }
 
     JsonObject obj = item.as<JsonObject>();
 
-    String horario = obj["time"] | "";
-    String dias = obj["days"] | "";
+    if (!obj["time"].is<const char*>() ||
+        !obj["portions"].is<int>() ||
+        !obj["enabled"].is<bool>() ||
+        !obj["days"].is<const char*>()) {
+      Serial.println("ERRO: Campos ausentes ou invalidos.");
+      return false;
+    }
 
-    int duracao = obj["portions"] | 0;
+    String horario = obj["time"].as<String>();
+    String dias = obj["days"].as<String>();
+    int duracao = obj["portions"].as<int>();
 
-    if (
-      horario.length() != 5 ||
-      horario.charAt(2) != ':' ||
-      !isDigit(horario.charAt(0)) ||
-      !isDigit(horario.charAt(1)) ||
-      !isDigit(horario.charAt(3)) ||
-      !isDigit(horario.charAt(4))
-    ) {
-      Serial.println("ERRO: Horário inválido.");
+    if (horario.length() != 5 ||
+        horario.charAt(2) != ':' ||
+        !isDigit(horario.charAt(0)) ||
+        !isDigit(horario.charAt(1)) ||
+        !isDigit(horario.charAt(3)) ||
+        !isDigit(horario.charAt(4))) {
+      Serial.println("ERRO: Horario invalido.");
       return false;
     }
 
     int hora = horario.substring(0, 2).toInt();
     int minuto = horario.substring(3, 5).toInt();
 
-    if (hora > 23 || minuto > 59 || duracao < 1 || duracao > 60) {
-      Serial.println("ERRO: Horário ou duração fora do limite.");
+    if (hora > 23 || minuto > 59 ||
+        duracao < 1 || duracao > 60) {
+      Serial.println("ERRO: Horario ou duracao fora do limite.");
       return false;
     }
 
@@ -395,49 +491,208 @@ bool salvarAgendamentosNoFlash(const String& jsonPayload) {
       return false;
     }
 
+    int inicio = 0;
     bool encontrouDia = false;
 
-    for (const char* dia : diasValidos) {
-      if (dias.indexOf(dia) >= 0) {
-        encontrouDia = true;
-        break;
+    while (inicio < dias.length()) {
+      int separador = dias.indexOf(',', inicio);
+      if (separador == -1) separador = dias.length();
+
+      String dia = dias.substring(inicio, separador);
+      dia.trim();
+
+      bool valido = false;
+
+      for (const char* diaValido : diasValidos) {
+        if (dia == diaValido) {
+          valido = true;
+          break;
+        }
       }
+
+      if (!valido) {
+        Serial.println("ERRO: Dia invalido: " + dia);
+        return false;
+      }
+
+      encontrouDia = true;
+      inicio = separador + 1;
     }
 
     if (!encontrouDia) {
-      Serial.println("ERRO: Dias inválidos.");
       return false;
     }
   }
 
+  return true;
+}
+
+bool migrarAgendamentosAntigos() {
   if (!preferences.begin("feeder", false)) {
-    Serial.println("ERRO: Não foi possível abrir a NVS.");
+    Serial.println("Erro ao abrir NVS para migracao.");
     return false;
   }
 
-  size_t gravados = preferences.putString("schedules", jsonPayload);
+  //novo registro ja existe nao migrar novamente
+  if (preferences.isKey("schedule_v2")) {
+    preferences.end();
+    return true;
+  }
+
+  String jsonAntigo = preferences.getString("schedules", "[]");
+
+  JsonDocument antigo;
+
+  DeserializationError erro = deserializeJson(antigo, jsonAntigo);
+
+  if (erro || !antigo.is<JsonArray>()) {
+    Serial.println("Erro: agendamentos antigos invalidos.");
+    preferences.end();
+    return false;
+  }
+
+  JsonDocument novo;
+
+  novo["revision"] = 0;
+  novo["requestId"] = "";
+
+  novo["feeds"] = antigo.as<JsonArray>();
+
+  String registro;
+  serializeJson(novo, registro);
+
+  size_t gravados = preferences.putString("schedule_v2", registro);
+
   preferences.end();
 
-  if (gravados != jsonPayload.length()) {
-    Serial.println("ERRO: Falha ao gravar agendamentos na NVS.");
+  if (gravados != registro.length()) {
+    Serial.println("Erro ao migrar agendamentos.");
     return false;
   }
 
-  Serial.println("Agendamentos gravados na NVS com sucesso!");
+  Serial.println("Agendamentos antigos migrados com sucesso!");
   return true;
 }
 
 
-void carregarAgendamentosDoFlash() {
- preferences.begin("feeder", true);
- String json = preferences.getString("schedules", "[]");
- preferences.end();
+bool salvarRegistroAgendamentos(
+  const String& requestId,
+  uint32_t revision,
+  const String& feedsJSON
+) {
+  JsonDocument feedsDoc;
 
+  DeserializationError erro = deserializeJson(feedsDoc, feedsJSON);
 
- processarJSONAgendamentos(json);
- Serial.println("Agendamentos recarregados do Flash.");
+  if (erro || !feedsDoc.is<JsonArray>()) {
+    Serial.println("Erro: lista de agendamentos invalida.");
+    return false;
+  }
+
+  if (feedsDoc.as<JsonArray>().size() > MAX_SCHEDULES) {
+    Serial.println("Erro: limite de agendamentos excedido.");
+    return false;
+  }
+
+  JsonDocument registroDoc;
+
+  registroDoc["revision"] = revision;
+  registroDoc["requestId"] = requestId;
+  registroDoc["feeds"] = feedsDoc.as<JsonArray>();
+
+  String registroJSON;
+  serializeJson(registroDoc, registroJSON);
+
+  if (!preferences.begin("feeder", false)) {
+    Serial.println("Erro ao abrir NVS.");
+    return false;
+  }
+
+  if (registroJSON.length() > 1900) {
+    Serial.println("ERRO: Registro excede o limite configurado.");
+    preferences.end();
+    return false;
+  }
+
+  size_t gravados = preferences.putString(
+    "schedule_v2",
+    registroJSON
+  );
+
+  preferences.end();
+
+  if (gravados != registroJSON.length()) {
+    Serial.println("Erro ao gravar registro na NVS.");
+    return false;
+  }
+
+  //confirma que o registro pode ser lid novamente
+  if (!preferences.begin("feeder", true)) {
+    return false;
+  }
+
+  String registroLido = preferences.getString("schedule_v2", "");
+
+  preferences.end();
+
+  if (registroLido != registroJSON) {
+    Serial.println("Erro: verificacao da gravacao falhou.");
+    return false;
+  }
+
+  revisionAtual = revision;
+  ultimoRequestId = requestId;
+
+  Serial.printf(
+    "Registro salvo na NVS! Revisao: %lu\n",
+    (unsigned long)revisionAtual
+  );
+
+  return true;
 }
 
+
+
+void carregarAgendamentosDoFlash() {
+  if (!migrarAgendamentosAntigos()) {
+    Serial.println("Falha ao preparar armazenamento de agendamentos.");
+    return;
+  }
+
+  if (!preferences.begin("feeder", true)) {
+    Serial.println("Erro ao abrir NVS para leitura.");
+    return;
+  }
+
+  String registro = preferences.getString("schedule_v2", "");
+
+  preferences.end();
+
+  JsonDocument doc;
+
+  DeserializationError erro = deserializeJson(doc, registro);
+
+  if (erro || !doc.is<JsonObject>() ||
+      !doc["feeds"].is<JsonArray>()) {
+    Serial.println("Erro ao interpretar registro da NVS.");
+    return;
+  }
+
+  revisionAtual = doc["revision"] | 0;
+  ultimoRequestId = doc["requestId"].as<String>();
+
+  String feedsJSON;
+  serializeJson(doc["feeds"], feedsJSON);
+
+  processarJSONAgendamentos(feedsJSON);
+
+  Serial.println("Agendamentos recuperados do novo registro NVS.");
+
+  Serial.printf(
+    "Revisao atual: %lu\n",
+    (unsigned long)revisionAtual
+  );
+}
 
 void processarJSONAgendamentos(const String& jsonPayload) {
  StaticJsonDocument<2048> doc;
@@ -518,18 +773,43 @@ void verificarAgendamentosLocais() {
  }
 }
 
+
 void publicarAgendamentosDoFlash() {
-  preferences.begin("feeder", true);
-  String json = preferences.getString("schedules", "[]");
+  if (!preferences.begin("feeder", true)) {
+    Serial.println("Erro ao abrir NVS.");
+    return;
+  }
+
+  String registro = preferences.getString("schedule_v2", "");
+
   preferences.end();
 
-  Serial.println("Agendamentos lidos da Flash:");
-  Serial.println(json);
+  JsonDocument doc;
+
+  DeserializationError erro = deserializeJson(doc, registro);
+
+  if (erro || !doc.is<JsonObject>() ||
+      !doc["feeds"].is<JsonArray>()) {
+    Serial.println("Erro ao recuperar agendamentos.");
+    return;
+  }
+
+  // Monta a resposta com revisao e agendamentos
+  JsonDocument resposta;
+
+  resposta["revision"] = doc["revision"].as<uint32_t>();
+  resposta["feeds"] = doc["feeds"].as<JsonArray>();
+
+  String respostaJSON;
+  serializeJson(resposta, respostaJSON);
+
+  Serial.println("Agendamentos e revisao lidos da Flash:");
+  Serial.println(respostaJSON);
 
   if (mqttClient.connected()) {
     bool enviado = mqttClient.publish(
       MQTT_TOPIC_RESPOSTA_AGENDAMENTOS,
-      json.c_str()
+      respostaJSON.c_str()
     );
 
     Serial.println(

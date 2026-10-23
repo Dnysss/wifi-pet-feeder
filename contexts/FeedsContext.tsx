@@ -3,17 +3,20 @@ import {
   ReactNode,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
 import { MqttService } from "@/services/mqtt/MqttService";
 import { Feed } from "@/types/feed";
+import { Alert } from "react-native";
 
 type FeedsContextData = {
   feeds: Feed[];
-  addFeed: (novoFeed: Feed) => void;
-  toggleFeed: (id: string) => void;
-  removeFeed: (id: string) => void;
+  salvando: boolean;
+  addFeed: (novoFeed: Feed) => Promise<void>;
+  toggleFeed: (id: string) => Promise<void>;
+  removeFeed: (id: string) => Promise<void>;
 };
 
 const FeedsContext = createContext<FeedsContextData | undefined>(undefined);
@@ -24,45 +27,90 @@ type FeedsProviderProps = {
 
 export function FeedsProvider({ children }: FeedsProviderProps) {
   const [feeds, setFeeds] = useState<Feed[]>([]);
+  const [salvando, setSalvando] = useState(false);
+
+  const salvandoRef = useRef(false);
+  const feedsRef = useRef<Feed[]>([]);
 
   const mqttService = MqttService.getInstance();
 
-  const atualizarESincronizar = (novosFeeds: Feed[]) => {
-    setFeeds(novosFeeds);
+  const verificarConexao = () => {
+    if (!mqttService.espEstaOnline()) {
+      Alert.alert(
+        "ESP32 desconectado",
+        "Conecte o alimentador antes de alterar os agendamentos.",
+      );
+      return false;
+    }
 
-    mqttService.sincronizarAgendamentos(novosFeeds);
+    return true;
   };
 
-  const addFeed = (novoFeed: Feed) => {
-    const atualizados = [...feeds, novoFeed];
+  const atualizarESincronizar = async (novosFeeds: Feed[]): Promise<void> => {
+    if (!verificarConexao()) {
+      throw new Error("ESP32 desconectado.");
+    }
 
-    console.log("FEEDS ANTES:", feeds);
-    console.log("FEEDS DEPOIS:", atualizados);
+    if (salvandoRef.current) {
+      throw new Error("Aguarde o salvamento anterior.");
+    }
 
-    atualizarESincronizar(atualizados);
+    salvandoRef.current = true;
+    setSalvando(true);
+
+    try {
+      await mqttService.sincronizarAgendamentos(novosFeeds);
+
+      // Só atualiza a interface após receber ACK
+      feedsRef.current = novosFeeds;
+      setFeeds(novosFeeds);
+
+      console.log("Agendamentos confirmados pelo ESP32.");
+    } catch (error) {
+      const mensagem =
+        error instanceof Error ? error.message : "Erro desconhecido.";
+
+      console.error("Erro ao salvar agendamentos:", mensagem);
+
+      Alert.alert("Erro ao salvar", mensagem);
+
+      // Recupera o estado verdadeiro da NVS
+      mqttService.solicitarAgendamentos();
+
+      throw error;
+    } finally {
+      salvandoRef.current = false;
+      setSalvando(false);
+    }
   };
 
-  const toggleFeed = (id: string) => {
-    if (!verificarConexao()) return;
+  const addFeed = async (novoFeed: Feed) => {
+    const atualizados = [...feedsRef.current, novoFeed];
+    await atualizarESincronizar(atualizados);
+  };
 
-    const atualizados = feeds.map((item) =>
+  const toggleFeed = async (id: string) => {
+    const atualizados = feedsRef.current.map((item) =>
       item.id === id ? { ...item, enabled: !item.enabled } : item,
     );
 
-    atualizarESincronizar(atualizados);
+    await atualizarESincronizar(atualizados);
   };
 
-  const removeFeed = (id: string) => {
-    if (!verificarConexao()) return;
+  const removeFeed = async (id: string) => {
+    const atualizados = feedsRef.current.filter((item) => item.id !== id);
 
-    const atualizados = feeds.filter((item) => item.id !== id);
-
-    atualizarESincronizar(atualizados);
+    await atualizarESincronizar(atualizados);
   };
 
   useEffect(() => {
     const unsubscribe = mqttService.inscreverAgendamentos((feedsRecebidos) => {
+      // Não sobrescrever a interface durante uma gravação
+      if (salvandoRef.current) return;
+
+      feedsRef.current = feedsRecebidos;
       setFeeds(feedsRecebidos);
+
       console.log("Lista atualizada com dados do ESP32:", feedsRecebidos);
     });
 
@@ -73,22 +121,11 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
     };
   }, []);
 
-  const verificarConexao = () => {
-    if (!mqttService.espEstaOnline()) {
-      console.warn(
-        "Operação bloqueada: ESP32 offline ou conexão MQTT indisponível.",
-      );
-
-      return false;
-    }
-
-    return true;
-  };
-
   return (
     <FeedsContext.Provider
       value={{
         feeds,
+        salvando,
         addFeed,
         toggleFeed,
         removeFeed,

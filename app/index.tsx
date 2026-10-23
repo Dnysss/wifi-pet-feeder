@@ -20,7 +20,7 @@ import FeedCard from "../components/FeedCard";
 
 export default function WifiPetFeeder() {
   const params = useLocalSearchParams();
-  const { feeds, addFeed, toggleFeed, removeFeed } = useFeeds();
+  const { feeds, addFeed, toggleFeed, removeFeed, salvando } = useFeeds();
   const { status, enviarComando, presenca } = useMqtt();
 
   const [manualFeedVisible, setManualFeedVisible] = useState(false);
@@ -66,8 +66,16 @@ export default function WifiPetFeeder() {
           return;
         }
 
-        addFeed(newFeedData);
         router.setParams({ newFeed: undefined });
+
+        void (async () => {
+          try {
+            await addFeed(newFeedData);
+            console.log("Agendamento salvo e confirmado pelo ESP32.");
+          } catch (error) {
+            console.error("Falha ao adicionar agendamento:", error);
+          }
+        })();
       } catch (error) {
         console.error("Erro ao ler parâmetro:", error);
       }
@@ -86,11 +94,19 @@ export default function WifiPetFeeder() {
         {
           text: "Excluir",
           style: "destructive",
-          onPress: () => {
-            if (!verificarConexao()) return;
+          onPress: async () => {
+            if (!verificarConexao() || !selectedFeed) return;
 
-            removeFeed(selectedFeed.id);
-            setSelectedFeed(null);
+            try {
+              await removeFeed(selectedFeed.id);
+
+              //fecha o modal somente depos a confirmacao do ESP32
+              setSelectedFeed(null);
+
+              console.log("Agendamento excluído com sucesso.");
+            } catch (error) {
+              console.error("Falha ao excluir agendamento:", error);
+            }
           },
         },
       ],
@@ -155,10 +171,16 @@ export default function WifiPetFeeder() {
               days={Array.isArray(feed.days) ? feed.days.join(", ") : feed.days}
               portions={feed.portions}
               enabled={feed.enabled}
-              onToggle={() => {
+              onToggle={async () => {
                 if (!verificarConexao()) return;
 
-                toggleFeed(feed.id);
+                try {
+                  await toggleFeed(feed.id);
+
+                  console.log("Status do agendamento atualizado.");
+                } catch (error) {
+                  console.error("Falha ao alterar agendamento:", error);
+                }
               }}
               onPress={() => setSelectedFeed(feed)}
             />
@@ -167,6 +189,7 @@ export default function WifiPetFeeder() {
 
         <Pressable
           style={styles.addButton}
+          disabled={salvando}
           onPress={() => {
             if (!verificarConexao()) return;
 
