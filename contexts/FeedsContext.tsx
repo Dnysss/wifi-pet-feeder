@@ -85,6 +85,8 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
   };
 
   const addFeed = async (novoFeed: Feed) => {
+    console.log("ADD FEED CHAMADO:", novoFeed);
+    
     const atualizados = [...feedsRef.current, novoFeed];
     await atualizarESincronizar(atualizados);
   };

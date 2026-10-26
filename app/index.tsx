@@ -1,6 +1,6 @@
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -26,6 +26,7 @@ export default function WifiPetFeeder() {
   const [manualFeedVisible, setManualFeedVisible] = useState(false);
   const [manualFeedTime, setManualFeedTime] = useState(5);
   const [selectedFeed, setSelectedFeed] = useState<Feed | null>(null);
+  const ultimoNewFeedProcessado = useRef<string | null>(null);
 
   const alimentadorOnline = presenca === "online";
   const mqttService = MqttService.getInstance();
@@ -45,40 +46,57 @@ export default function WifiPetFeeder() {
 
   //le parametros da rota quando um novo agendamento eh criado
   useEffect(() => {
-    if (params.newFeed) {
-      try {
-        const parsedData = JSON.parse(params.newFeed as string);
-        const newFeedData: Feed = {
-          id: parsedData.id || Date.now().toString(),
-          time: parsedData.time || "00:00",
-          portions: Number(parsedData.portions) || 5,
-          enabled: parsedData.enabled ?? true,
-          days: Array.isArray(parsedData.days) ? parsedData.days : [],
-        };
+    const parametro = params.newFeed;
 
-        if (!mqttService.espEstaOnline()) {
-          Alert.alert(
-            "Alimentador desconectado",
-            "Não foi possível salvar o agendamento porque o alimentador está offline.",
-          );
+    if (typeof parametro !== "string" || !parametro) {
+      return;
+    }
 
-          router.setParams({ newFeed: undefined });
-          return;
-        }
+    // Impede processar duas vezes o mesmo parâmetro
+    if (ultimoNewFeedProcessado.current === parametro) {
+      return;
+    }
 
-        router.setParams({ newFeed: undefined });
+    ultimoNewFeedProcessado.current = parametro;
 
-        void (async () => {
-          try {
-            await addFeed(newFeedData);
-            console.log("Agendamento salvo e confirmado pelo ESP32.");
-          } catch (error) {
-            console.error("Falha ao adicionar agendamento:", error);
-          }
-        })();
-      } catch (error) {
-        console.error("Erro ao ler parâmetro:", error);
+    // Remove o parâmetro da rota
+    router.setParams({ newFeed: undefined });
+
+    try {
+      const parsedData = JSON.parse(parametro);
+
+      const newFeedData: Feed = {
+        id: parsedData.id || Date.now().toString(),
+        time: parsedData.time || "00:00",
+        portions: Number(parsedData.portions) || 5,
+        enabled: parsedData.enabled ?? true,
+        days: Array.isArray(parsedData.days) ? parsedData.days : [],
+      };
+
+      if (!mqttService.espEstaOnline()) {
+        Alert.alert(
+          "Alimentador desconectado",
+          "Não foi possível salvar porque o alimentador está offline.",
+        );
+        return;
       }
+
+      void (async () => {
+        try {
+          console.log("Iniciando salvamento:", newFeedData.id);
+
+          await addFeed(newFeedData);
+
+          console.log(
+            "Agendamento salvo e confirmado pelo ESP32:",
+            newFeedData.id,
+          );
+        } catch (error) {
+          console.error("Falha ao adicionar agendamento:", error);
+        }
+      })();
+    } catch (error) {
+      console.error("Erro ao ler parâmetro:", error);
     }
   }, [params.newFeed, alimentadorOnline, addFeed]);
 

@@ -651,11 +651,84 @@ bool salvarRegistroAgendamentos(
   return true;
 }
 
+bool migrarIdsAgendamentos() {
+  if (!preferences.begin("feeder", false)) {
+    Serial.println("Erro ao abrir NVS para migrar IDs.");
+    return false;
+  }
 
+  String registro = preferences.getString("schedule_v2", "");
+
+  JsonDocument doc;
+
+  DeserializationError erro = deserializeJson(doc, registro);
+
+  if (erro || !doc.is<JsonObject>() ||
+      !doc["feeds"].is<JsonArray>()) {
+    Serial.println("Erro ao interpretar agendamentos para migracao.");
+    preferences.end();
+    return false;
+  }
+
+  JsonArray feeds = doc["feeds"].as<JsonArray>();
+  bool alterado = false;
+
+  for (JsonObject feed : feeds) {
+    String id = feed["id"].as<String>();
+
+    if (id.isEmpty()) {
+      String novoId = "esp32-" +
+        String((unsigned long)esp_random(), HEX) +
+        "-" +
+        String((unsigned long)esp_random(), HEX);
+
+      feed["id"] = novoId;
+      alterado = true;
+
+      Serial.print("ID atribuido: ");
+      Serial.println(novoId);
+    }
+  }
+
+  if (!alterado) {
+    preferences.end();
+    Serial.println("Todos os agendamentos ja possuem IDs.");
+    return true;
+  }
+
+  String novoRegistro;
+  serializeJson(doc, novoRegistro);
+
+  if (novoRegistro.length() > 1900) {
+    Serial.println("Erro: registro excede o limite.");
+    preferences.end();
+    return false;
+  }
+
+  size_t gravados = preferences.putString(
+    "schedule_v2",
+    novoRegistro
+  );
+
+  preferences.end();
+
+  if (gravados != novoRegistro.length()) {
+    Serial.println("Erro ao salvar IDs na NVS.");
+    return false;
+  }
+
+  Serial.println("Migracao de IDs concluida!");
+  return true;
+}
 
 void carregarAgendamentosDoFlash() {
   if (!migrarAgendamentosAntigos()) {
     Serial.println("Falha ao preparar armazenamento de agendamentos.");
+    return;
+  }
+
+  if (!migrarIdsAgendamentos()) {
+    Serial.println("Falha ao preparar IDs dos agendamentos.");
     return;
   }
 

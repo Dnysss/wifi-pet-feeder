@@ -170,6 +170,7 @@ export class MqttService implements IMqttService {
       if (ack.status === "saved" && ack.revision === this.revision + 1) {
         console.log("ESP32 confirmou o salvamento:", ack.requestId);
         pendente.resolve();
+        this.solicitarAgendamentos();
       } else {
         pendente.reject(
           new Error(ack.message ?? "ESP32 rejeitou os agendamentos."),
@@ -184,7 +185,6 @@ export class MqttService implements IMqttService {
     try {
       const dados = JSON.parse(payload);
 
-      // Novo formato enviado pelo ESP32
       if (
         !dados ||
         Array.isArray(dados) ||
@@ -196,9 +196,28 @@ export class MqttService implements IMqttService {
         return;
       }
 
-      // Não sobrescrever a lista durante uma gravação pendente
       if (this.ackPendente) {
-        console.log("Resposta recebida durante gravação. Aguardando ACK.");
+        console.log("Resposta ignorada: aguardando confirmação do ESP32.");
+        return;
+      }
+
+      if (this.revisaoCarregada && dados.revision < this.revision) {
+        console.warn(
+          "Resposta antiga ignorada.",
+          "Recebida:",
+          dados.revision,
+          "Atual:",
+          this.revision,
+        );
+        return;
+      }
+
+      if (
+        dados.feeds.some(
+          (item: any) => typeof item.id !== "string" || item.id.trim() === "",
+        )
+      ) {
+        console.error("Existem agendamentos sem ID na resposta.");
         return;
       }
 
@@ -215,7 +234,7 @@ export class MqttService implements IMqttService {
         }
 
         return {
-          id: item.id ?? `esp32-${index}-${item.time ?? "00:00"}`,
+          id: item.id,
           time: item.time ?? "00:00",
           portions: Number(item.portions ?? 5),
           enabled: item.enabled ?? true,
@@ -271,6 +290,7 @@ export class MqttService implements IMqttService {
 
   public sincronizarAgendamentos(feeds: Feed[]): Promise<void> {
     return new Promise((resolve, reject) => {
+      console.log("SINCRONIZAR AGENDAMENTOS CHAMADO");
       if (!this.espEstaOnline()) {
         reject(new Error("ESP32 desconectado."));
         return;
@@ -293,6 +313,7 @@ export class MqttService implements IMqttService {
         requestId,
         revision,
         feeds: feeds.map((item) => ({
+          id: item.id,
           time: item.time,
           portions: Number(item.portions),
           enabled: item.enabled,
