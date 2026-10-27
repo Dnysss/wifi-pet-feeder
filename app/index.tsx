@@ -17,10 +17,18 @@ import { useMqtt } from "@/hooks/useMqtt";
 import { MqttService } from "@/services/mqtt/MqttService";
 import { Feed } from "@/types/feed";
 import FeedCard from "../components/FeedCard";
+import SyncStatus from "@/components/SyncStatus";
 
 export default function WifiPetFeeder() {
   const params = useLocalSearchParams();
-  const { feeds, addFeed, toggleFeed, removeFeed, salvando } = useFeeds();
+  const {
+    feeds,
+    addFeed,
+    toggleFeed,
+    removeFeed,
+    salvando,
+    statusSincronizacao,
+  } = useFeeds();
   const { status, enviarComando, presenca } = useMqtt();
 
   const [manualFeedVisible, setManualFeedVisible] = useState(false);
@@ -175,6 +183,8 @@ export default function WifiPetFeeder() {
                 : "Alimentador pronto"}
         </Text>
       </View>
+
+      <SyncStatus status={statusSincronizacao} />
 
       <View style={styles.bottomArea}>
         <ScrollView

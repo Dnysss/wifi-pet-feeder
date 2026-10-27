@@ -14,10 +14,17 @@ import { Alert } from "react-native";
 type FeedsContextData = {
   feeds: Feed[];
   salvando: boolean;
+  statusSincronizacao: StatusSincronizacao;
   addFeed: (novoFeed: Feed) => Promise<void>;
   toggleFeed: (id: string) => Promise<void>;
   removeFeed: (id: string) => Promise<void>;
 };
+
+export type StatusSincronizacao =
+  | "aguardando"
+  | "sincronizando"
+  | "sincronizado"
+  | "erro";
 
 const FeedsContext = createContext<FeedsContextData | undefined>(undefined);
 
@@ -28,6 +35,8 @@ type FeedsProviderProps = {
 export function FeedsProvider({ children }: FeedsProviderProps) {
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [salvando, setSalvando] = useState(false);
+  const [statusSincronizacao, setStatusSincronizacao] =
+    useState<StatusSincronizacao>("aguardando");
 
   const salvandoRef = useRef(false);
   const feedsRef = useRef<Feed[]>([]);
@@ -48,6 +57,7 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
   const atualizarESincronizar = async (novosFeeds: Feed[]): Promise<void> => {
     if (!verificarConexao()) {
+      setStatusSincronizacao("erro");
       throw new Error("ESP32 desconectado.");
     }
 
@@ -57,16 +67,23 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
     salvandoRef.current = true;
     setSalvando(true);
+    setStatusSincronizacao("sincronizando");
 
     try {
+      //aguarda o ACK do ESP32
       await mqttService.sincronizarAgendamentos(novosFeeds);
 
       // Só atualiza a interface após receber ACK
       feedsRef.current = novosFeeds;
       setFeeds(novosFeeds);
 
+      //esp confirmou o salvamento
+      setStatusSincronizacao("sincronizado");
+
       console.log("Agendamentos confirmados pelo ESP32.");
     } catch (error) {
+      setStatusSincronizacao("erro");
+
       const mensagem =
         error instanceof Error ? error.message : "Erro desconhecido.";
 
@@ -74,7 +91,7 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
       Alert.alert("Erro ao salvar", mensagem);
 
-      // Recupera o estado verdadeiro da NVS
+      //colicitar o estado real armazenado no esp
       mqttService.solicitarAgendamentos();
 
       throw error;
@@ -86,7 +103,7 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
   const addFeed = async (novoFeed: Feed) => {
     console.log("ADD FEED CHAMADO:", novoFeed);
-    
+
     const atualizados = [...feedsRef.current, novoFeed];
     await atualizarESincronizar(atualizados);
   };
@@ -107,11 +124,13 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
   useEffect(() => {
     const unsubscribe = mqttService.inscreverAgendamentos((feedsRecebidos) => {
-      // Não sobrescrever a interface durante uma gravação
       if (salvandoRef.current) return;
 
       feedsRef.current = feedsRecebidos;
       setFeeds(feedsRecebidos);
+
+      //confirmado q a lista foi recebida do esp
+      setStatusSincronizacao("sincronizado");
 
       console.log("Lista atualizada com dados do ESP32:", feedsRecebidos);
     });
@@ -131,6 +150,7 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
         addFeed,
         toggleFeed,
         removeFeed,
+        statusSincronizacao,
       }}
     >
       {children}
