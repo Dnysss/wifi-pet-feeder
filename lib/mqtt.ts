@@ -45,6 +45,7 @@ export function conectarMQTT(): MqttClient {
 
   client.on("message", (topic, message) => {
     const mensagem = message.toString();
+    console.count("CALLBACK MQTT EXECUTADO");
 
     console.log("Mensagem MQTT recebida:", topic, mensagem);
 

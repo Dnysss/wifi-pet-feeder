@@ -23,6 +23,7 @@ type FeedsContextData = {
 export type StatusSincronizacao =
   | "aguardando"
   | "sincronizando"
+  | "verificando"
   | "sincronizado"
   | "erro";
 
@@ -82,17 +83,27 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
 
       console.log("Agendamentos confirmados pelo ESP32.");
     } catch (error) {
-      setStatusSincronizacao("erro");
-
       const mensagem =
         error instanceof Error ? error.message : "Erro desconhecido.";
 
-      console.error("Erro ao salvar agendamentos:", mensagem);
+      console.error("Problema na sincronização:", mensagem);
 
-      Alert.alert("Erro ao salvar", mensagem);
+      if (mqttService.possuiSalvamentoIncerto()) {
+        setStatusSincronizacao("verificando");
 
-      //colicitar o estado real armazenado no esp
-      mqttService.solicitarAgendamentos();
+        Alert.alert(
+          "Verificando salvamento",
+          "O ESP32 pode ter recebido a alteração, mas a confirmação não chegou. O aplicativo irá consultar os dados armazenados.",
+        );
+
+        mqttService.tentarRecuperarSalvamento();
+      } else {
+        setStatusSincronizacao("erro");
+
+        Alert.alert("Erro ao salvar", mensagem);
+
+        mqttService.solicitarAgendamentos();
+      }
 
       throw error;
     } finally {
@@ -129,16 +140,36 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
       feedsRef.current = feedsRecebidos;
       setFeeds(feedsRecebidos);
 
-      //confirmado q a lista foi recebida do esp
+      //n confirma enquanto existir um salvamento incerto
+      if (mqttService.possuiSalvamentoIncerto()) {
+        setStatusSincronizacao("verificando");
+        return;
+      }
+
       setStatusSincronizacao("sincronizado");
 
       console.log("Lista atualizada com dados do ESP32:", feedsRecebidos);
     });
 
+    const unsubscribeReconciliacao = mqttService.inscreverReconciliacao(
+      (resultado) => {
+        if (resultado === "confirmado") {
+          setStatusSincronizacao("sincronizado");
+
+          console.log("Sincronização recuperada e confirmada pela NVS.");
+        } else {
+          setStatusSincronizacao("erro");
+
+          console.warn("Conflito detectado na recuperação dos agendamentos.");
+        }
+      },
+    );
+
     mqttService.conectar();
 
     return () => {
       unsubscribe();
+      unsubscribeReconciliacao();
     };
   }, []);
 

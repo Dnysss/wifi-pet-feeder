@@ -184,7 +184,7 @@ export default function WifiPetFeeder() {
         </Text>
       </View>
 
-      <SyncStatus status={statusSincronizacao} />
+      <SyncStatus status={statusSincronizacao} online={alimentadorOnline} />
 
       <View style={styles.bottomArea}>
         <ScrollView

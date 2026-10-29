@@ -90,7 +90,7 @@ void verificarAgendamentosLocais();
 bool salvarAgendamentosNoFlash(const String& jsonPayload);
 void carregarAgendamentosDoFlash();
 void processarJSONAgendamentos(const String& jsonPayload);
-void publicarAgendamentosDoFlash();
+void publicarAgendamentosDoFlash(const String& queryId = "");
 void publicarAckAgendamentos(
   const String& requestId,
   unsigned long revision,
@@ -375,10 +375,29 @@ void mensagemRecebida(char* topic, byte* payload, unsigned int length) {
     Serial.println("Agendamentos salvos e confirmados.");
   }
 
-  else if (topicoRecebido == MQTT_TOPIC_SOLICITAR_AGENDAMENTOS) {
-    Serial.println("Solicitacao de agendamentos recebida.");
-    publicarAgendamentosDoFlash();
+else if (topicoRecebido == MQTT_TOPIC_SOLICITAR_AGENDAMENTOS) {
+  Serial.println("Solicitacao de agendamentos recebida.");
+
+  JsonDocument pedido;
+
+  DeserializationError erro =
+    deserializeJson(pedido, mensagem);
+
+  if (erro || !pedido.is<JsonObject>() ||
+      !pedido["queryId"].is<const char*>()) {
+    Serial.println("ERRO: Solicitacao invalida.");
+    return;
   }
+
+  String queryId = pedido["queryId"].as<String>();
+
+  if (queryId.isEmpty() || queryId.length() > 80) {
+    Serial.println("ERRO: queryId invalido.");
+    return;
+  }
+
+  publicarAgendamentosDoFlash(queryId);
+}
 
   Serial.println("================================");
 }
@@ -847,36 +866,48 @@ void verificarAgendamentosLocais() {
 }
 
 
-void publicarAgendamentosDoFlash() {
+void publicarAgendamentosDoFlash(const String& queryId) {
   if (!preferences.begin("feeder", true)) {
     Serial.println("Erro ao abrir NVS.");
     return;
   }
 
-  String registro = preferences.getString("schedule_v2", "");
+  String registro =
+    preferences.getString("schedule_v2", "");
 
   preferences.end();
 
   JsonDocument doc;
 
-  DeserializationError erro = deserializeJson(doc, registro);
+  DeserializationError erro =
+    deserializeJson(doc, registro);
 
   if (erro || !doc.is<JsonObject>() ||
-      !doc["feeds"].is<JsonArray>()) {
+      !doc["feeds"].is<JsonArray>() ||
+      !doc["revision"].is<uint32_t>() ||
+      !doc["requestId"].is<const char*>()) {
     Serial.println("Erro ao recuperar agendamentos.");
     return;
   }
 
-  // Monta a resposta com revisao e agendamentos
+  // Monta a resposta com os dados salvos na NVS
   JsonDocument resposta;
 
-  resposta["revision"] = doc["revision"].as<uint32_t>();
-  resposta["feeds"] = doc["feeds"].as<JsonArray>();
+  resposta["revision"] =
+    doc["revision"].as<uint32_t>();
+
+  resposta["requestId"] =
+    doc["requestId"].as<String>();
+
+  resposta["queryId"] = queryId;
+
+  resposta["feeds"] =
+    doc["feeds"].as<JsonArray>();
 
   String respostaJSON;
   serializeJson(resposta, respostaJSON);
 
-  Serial.println("Agendamentos e revisao lidos da Flash:");
+  Serial.println("Agendamentos recuperados da NVS:");
   Serial.println(respostaJSON);
 
   if (mqttClient.connected()) {
@@ -886,8 +917,9 @@ void publicarAgendamentosDoFlash() {
     );
 
     Serial.println(
-      enviado ? "Resposta enviada ao app."
-              : "Falha ao enviar resposta."
+      enviado
+        ? "Resposta enviada ao aplicativo."
+        : "Falha ao enviar resposta."
     );
   }
 }
