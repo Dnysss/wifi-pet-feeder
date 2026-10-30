@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 
-import { MqttService } from "@/services/mqtt/MqttService";
+import { MqttService, SalvamentoPendenteError } from "@/services/mqtt/MqttService";
 import { Feed } from "@/types/feed";
 import { Alert } from "react-native";
 
@@ -86,23 +86,15 @@ export function FeedsProvider({ children }: FeedsProviderProps) {
       const mensagem =
         error instanceof Error ? error.message : "Erro desconhecido.";
 
-      console.error("Problema na sincronização:", mensagem);
+      if (error instanceof SalvamentoPendenteError) {
+        console.warn("Salvamento sem ACK. Verificando a NVS:", mensagem);
 
-      if (mqttService.possuiSalvamentoIncerto()) {
-        setStatusSincronizacao("verificando");
-
-        Alert.alert(
-          "Verificando salvamento",
-          "O ESP32 pode ter recebido a alteração, mas a confirmação não chegou. O aplicativo irá consultar os dados armazenados.",
-        );
-
-        mqttService.tentarRecuperarSalvamento();
+        if (mqttService.possuiSalvamentoIncerto()) {
+          setStatusSincronizacao("verificando");
+        }
       } else {
+        console.error("Problema na sincronização:", mensagem);
         setStatusSincronizacao("erro");
-
-        Alert.alert("Erro ao salvar", mensagem);
-
-        mqttService.solicitarAgendamentos();
       }
 
       throw error;

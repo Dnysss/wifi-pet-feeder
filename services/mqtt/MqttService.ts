@@ -2,6 +2,13 @@ import mqtt, { MqttClient } from "mqtt";
 import { Feed } from "../../types/feed";
 import { IMqttService } from "./IMqttService";
 
+export class SalvamentoPendenteError extends Error {
+  constructor() {
+    super("Salvamento sem ACK. Aguardando verificação da NVS.");
+    this.name = "SalvamentoPendenteError";
+  }
+}
+
 export class MqttService implements IMqttService {
   private static instance: MqttService;
 
@@ -103,13 +110,12 @@ export class MqttService implements IMqttService {
   }
 
   public conectar(): void {
-    console.count("CLIENTE MQTT CRIADO");
     if (this.client) {
-      if (this.client.connected) {
-        this.solicitarAgendamentos();
-      }
+      console.log("MQTT: cliente já existe. Reutilizando conexão.");
       return;
     }
+
+    console.count("CLIENTE MQTT CRIADO");
 
     this.client = mqtt.connect(this.broker, {
       username: this.username,
@@ -124,6 +130,7 @@ export class MqttService implements IMqttService {
 
     this.client.on("connect", () => {
       console.log("MQTT conectado!");
+      console.count("EVENTO MQTT CONNECT");
 
       this.client?.subscribe(
         [
@@ -170,6 +177,7 @@ export class MqttService implements IMqttService {
     });
 
     this.client.on("close", () => {
+      console.count("EVENTO MQTT CLOSE");
       this.ultimaPresenca = null;
 
       this.presencaListeners.forEach((listener) => {
@@ -451,11 +459,7 @@ export class MqttService implements IMqttService {
           requestId,
         );
 
-        reject(
-          new Error(
-            "Não foi possível confirmar o salvamento. Verificando o ESP32.",
-          ),
-        );
+        reject(new SalvamentoPendenteError());
 
         this.solicitarAgendamentos();
       }, 10000);

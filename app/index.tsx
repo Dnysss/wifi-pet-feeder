@@ -12,12 +12,15 @@ import {
   View,
 } from "react-native";
 
+import SyncStatus from "@/components/SyncStatus";
 import { useFeeds } from "@/hooks/useFeeds";
 import { useMqtt } from "@/hooks/useMqtt";
-import { MqttService } from "@/services/mqtt/MqttService";
+import {
+  MqttService,
+  SalvamentoPendenteError,
+} from "@/services/mqtt/MqttService";
 import { Feed } from "@/types/feed";
 import FeedCard from "../components/FeedCard";
-import SyncStatus from "@/components/SyncStatus";
 
 export default function WifiPetFeeder() {
   const params = useLocalSearchParams();
@@ -100,7 +103,13 @@ export default function WifiPetFeeder() {
             newFeedData.id,
           );
         } catch (error) {
-          console.error("Falha ao adicionar agendamento:", error);
+          if (error instanceof SalvamentoPendenteError) {
+            console.warn(
+              "Agendamento enviado. Aguardando confirmação pela NVS.",
+            );
+          } else {
+            console.error("Falha ao adicionar agendamento:", error);
+          }
         }
       })();
     } catch (error) {
@@ -141,7 +150,7 @@ export default function WifiPetFeeder() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#05CFA5" />
+      <StatusBar barStyle="dark-content" />
 
       <View style={styles.greenArea}>
         <Pressable style={styles.settingsButton}>
