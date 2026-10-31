@@ -44,6 +44,16 @@ export class MqttService implements IMqttService {
     criadoEm: number;
   } | null = null;
 
+  public podeSalvarAgendamentos(): boolean {
+    return (
+      this.client?.connected === true &&
+      this.espEstaOnline() &&
+      this.revisaoCarregada &&
+      !this.salvamentoIncerto &&
+      !this.ackPendente
+    );
+  }
+
   private revision = 0;
   private consultaPendenteId: string | null = null;
   private consultaPendenteEm = 0;
@@ -166,9 +176,23 @@ export class MqttService implements IMqttService {
       }
 
       if (topic === this.TOPIC_PRESENCA) {
+        const presencaAnterior = this.ultimaPresenca;
+
         this.ultimaPresenca = conteudo;
 
         this.presencaListeners.forEach((listener) => listener(conteudo));
+
+        if (
+          conteudo === "online" &&
+          presencaAnterior !== "online" &&
+          this.salvamentoIncerto
+        ) {
+          console.log(
+            "ESP32 voltou a ficar online. Recuperando salvamento pendente...",
+          );
+
+          this.consultarSalvamentoPendente();
+        }
       }
 
       if (topic === this.TOPIC_ACK_AGENDAMENTOS) {
@@ -349,10 +373,17 @@ export class MqttService implements IMqttService {
       return;
     }
 
-    if (!this.espEstaOnline()) {
-      console.warn("ESP32 offline.");
+    if (!this.client?.connected || !this.espEstaOnline()) {
+      console.warn("ESP32 ou MQTT offline. Recuperação aguardando reconexão.");
       return;
     }
+
+    if (this.consultaPendenteId) {
+      console.log("Já existe uma consulta à NVS em andamento.");
+      return;
+    }
+
+    console.log("Consultando NVS para recuperar salvamento pendente...");
 
     this.solicitarAgendamentos();
   }
