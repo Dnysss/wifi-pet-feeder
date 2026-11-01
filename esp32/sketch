@@ -124,7 +124,7 @@ void setup() {
  mqttClient.setCallback(mensagemRecebida);
 
  //intervalo de keepalive MQTT
-  mqttClient.setKeepAlive(5);
+  mqttClient.setKeepAlive(30);
 
 //Carrega agendamentos gravados na memoria flash NVS
  carregarAgendamentosDoFlash();
@@ -290,18 +290,30 @@ void mensagemRecebida(char* topic, byte* payload, unsigned int length) {
   Serial.println(topicoRecebido);
   Serial.print("Conteudo: ");
   Serial.println(mensagem);
-
+//TOPICO DE LISTA DE AGENDAMENTOS
   if (topicoRecebido == MQTT_TOPIC_COMANDO) {
     if (mensagem == "0") {
-      motorLigado = false;
-      motor.disableOutputs();
-      publicarStatus("parado");
+    motorLigado = false;
+    motor.disableOutputs();
+    publicarStatus("parado");
     } else {
-      unsigned long segundos = mensagem.toInt();
+      bool comandoValido =
+        !mensagem.isEmpty() &&
+        mensagem.length() <= 2;
 
-      if (segundos > 0) {
+      for (size_t i = 0; i < mensagem.length(); i++) {
+        if (!isDigit(mensagem.charAt(i))) {
+          comandoValido = false;
+          break;
+        }
+      }
+
+      int segundos = comandoValido ? mensagem.toInt() : 0;
+
+      if (segundos >= 1 && segundos <= 60) {
         acionarMotorPorSegundos(segundos);
       } else {
+        Serial.println("ERRO: Duracao manual invalida.");
         publicarStatus("erro_comando");
       }
     }
@@ -402,36 +414,13 @@ else if (topicoRecebido == MQTT_TOPIC_SOLICITAR_AGENDAMENTOS) {
   Serial.println("================================");
 }
 
- //TOPICO DE LISTA DE AGENDAMENTOS
- else if (String(topic) == MQTT_TOPIC_AGENDAMENTOS) {
-  Serial.println("Recebendo novos agendamentos...");
-   salvarAgendamentosNoFlash(mensagem);
-   processarJSONAgendamentos(mensagem);
-
-   Serial.println("Conferindo o que foi salvo na Flash:");
-   publicarAgendamentosDoFlash();
- }
-
- else if (String(topic) == MQTT_TOPIC_AGENDAMENTOS) {
-  Serial.println("Recebendo novos agendamentos...");
-
-  if (!salvarAgendamentosNoFlash(mensagem)) {
-    Serial.println("Agendamentos rejeitados. Lista anterior preservada.");
-    return;
-  }
-
-  carregarAgendamentosDoFlash();
-
-  Serial.println("Conferindo o que foi salvo na Flash:");
-  publicarAgendamentosDoFlash();
-}
-
- Serial.println("================================");
-}
-
-
 //ACIONA O MOTOR
 void acionarMotorPorSegundos(unsigned long segundos) {
+  if (segundos < 1 || segundos > 60) {
+    Serial.println("ERRO: Duracao do motor fora do limite.");
+    publicarStatus("erro_comando");
+    return;
+  }
  tempoMotor = segundos * 1000UL;
  motorLigado = true;
  motor.enableOutputs();
