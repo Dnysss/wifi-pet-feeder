@@ -66,6 +66,8 @@ export class MqttService implements IMqttService {
   public readonly TOPIC_STATUS = "denys/alimentador/status";
   public readonly TOPIC_AGENDAMENTOS = "denys/alimentador/agendamentos";
 
+  private readonly TIMEOUT_CONSULTA = 10000;
+
   public readonly TOPIC_SOLICITAR_AGENDAMENTOS =
     "denys/alimentador/agendamentos/solicitar";
 
@@ -182,16 +184,14 @@ export class MqttService implements IMqttService {
 
         this.presencaListeners.forEach((listener) => listener(conteudo));
 
-        if (
-          conteudo === "online" &&
-          presencaAnterior !== "online" &&
-          this.salvamentoIncerto
-        ) {
-          console.log(
-            "ESP32 voltou a ficar online. Recuperando salvamento pendente...",
-          );
+        if (conteudo === "online" && presencaAnterior !== "online") {
+          console.log("ESP32 voltou a ficar online.");
 
-          this.consultarSalvamentoPendente();
+          if (this.salvamentoIncerto) {
+            this.consultarSalvamentoPendente();
+          } else if (!this.revisaoCarregada) {
+            this.solicitarAgendamentos();
+          }
         }
       }
 
@@ -213,6 +213,8 @@ export class MqttService implements IMqttService {
       });
 
       this.revisaoCarregada = false;
+      this.consultaPendenteId = null;
+      this.consultaPendenteEm = 0;
 
       if (this.ackPendente) {
         const pendente = this.ackPendente;
@@ -243,19 +245,38 @@ export class MqttService implements IMqttService {
     try {
       const ack = JSON.parse(payload);
 
+      if (
+        !ack ||
+        typeof ack !== "object" ||
+        Array.isArray(ack) ||
+        typeof ack.requestId !== "string" ||
+        ack.requestId.trim() === "" ||
+        !["saved", "rejected"].includes(ack.status) ||
+        !Number.isSafeInteger(ack.revision) ||
+        ack.revision < 0
+      ) {
+        console.error("ACK inválido recebido.");
+        return;
+      }
+
       if (!this.ackPendente) return;
 
-      if (ack.requestId !== this.ackPendente.requestId) {
+      const pendente = this.ackPendente;
+
+      if (ack.requestId !== pendente.requestId) {
         console.warn("ACK ignorado: requestId diferente.");
         return;
       }
 
-      const pendente = this.ackPendente;
+      if (ack.revision !== pendente.revision) {
+        console.warn("ACK ignorado: revisão diferente.");
+        return;
+      }
 
       clearTimeout(pendente.timeout);
       this.ackPendente = null;
 
-      if (ack.status === "saved" && ack.revision === pendente.revision) {
+      if (ack.status === "saved") {
         console.log("ESP32 confirmou o salvamento:", ack.requestId);
 
         if (this.salvamentoIncerto?.requestId === ack.requestId) {
@@ -263,11 +284,20 @@ export class MqttService implements IMqttService {
         }
 
         pendente.resolve();
+
         this.solicitarAgendamentos();
       } else {
+        console.error(
+          "ESP32 rejeitou os agendamentos:",
+          ack.message ?? "Motivo não informado.",
+        );
+
         pendente.reject(
           new Error(ack.message ?? "ESP32 rejeitou os agendamentos."),
         );
+
+        //consulta a nvs para recuperar o estado do esp
+        this.solicitarAgendamentos();
       }
     } catch (error) {
       console.error("Erro ao interpretar ACK:", error);
@@ -278,6 +308,11 @@ export class MqttService implements IMqttService {
     try {
       const dados = JSON.parse(payload);
 
+      if (!dados || typeof dados !== "object" || Array.isArray(dados)) {
+        console.error("Resposta de agendamentos inválida.");
+        return;
+      }
+
       if (
         typeof dados.queryId !== "string" ||
         dados.queryId !== this.consultaPendenteId
@@ -286,25 +321,30 @@ export class MqttService implements IMqttService {
         return;
       }
 
-      this.consultaPendenteId = null;
-
       if (
-        !dados ||
-        Array.isArray(dados) ||
         !Array.isArray(dados.feeds) ||
         !Number.isSafeInteger(dados.revision) ||
-        dados.revision < 0
+        dados.revision < 0 ||
+        typeof dados.requestId !== "string" ||
+        (dados.revision > 0 && dados.requestId.trim() === "")
       ) {
         console.error("Resposta de agendamentos inválida.");
         return;
       }
 
+      //n atualiza a lista enquanto aguarda um ACK
       if (this.ackPendente) {
+        this.consultaPendenteId = null;
+        this.consultaPendenteEm = 0;
+
         console.log("Resposta ignorada: aguardando confirmação do ESP32.");
         return;
       }
 
       if (this.revisaoCarregada && dados.revision < this.revision) {
+        this.consultaPendenteId = null;
+        this.consultaPendenteEm = 0;
+
         console.warn(
           "Resposta antiga ignorada.",
           "Recebida:",
@@ -315,45 +355,63 @@ export class MqttService implements IMqttService {
         return;
       }
 
-      if (
-        dados.feeds.some(
-          (item: any) => typeof item.id !== "string" || item.id.trim() === "",
-        )
-      ) {
-        console.error("Existem agendamentos sem ID na resposta.");
-        return;
-      }
+      const diasValidos = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+      const idsRecebidos = new Set<string>();
 
-      const feeds: Feed[] = dados.feeds.map((item: any, index: number) => {
-        let days: string[] = [];
-
-        if (Array.isArray(item.days)) {
-          days = item.days;
-        } else if (typeof item.days === "string") {
-          days = item.days
-            .split(",")
-            .map((dia: string) => dia.trim())
-            .filter(Boolean);
+      for (const item of dados.feeds) {
+        if (
+          !item ||
+          typeof item.id !== "string" ||
+          item.id.trim() === "" ||
+          typeof item.time !== "string" ||
+          !/^([01]\d|2[0-3]):[0-5]\d$/.test(item.time) ||
+          !Number.isInteger(item.portions) ||
+          item.portions < 1 ||
+          item.portions > 60 ||
+          typeof item.enabled !== "boolean" ||
+          !Array.isArray(item.days) ||
+          item.days.length < 1 ||
+          item.days.length > 7 ||
+          !item.days.every(
+            (dia: unknown) =>
+              typeof dia === "string" && diasValidos.includes(dia),
+          ) ||
+          new Set(item.days).size !== item.days.length
+        ) {
+          console.error("Agendamento inválido recebido:", item);
+          return;
         }
 
-        return {
-          id: item.id,
-          time: item.time ?? "00:00",
-          portions: Number(item.portions ?? 5),
-          enabled: item.enabled ?? true,
-          days,
-        };
-      });
+        if (idsRecebidos.has(item.id)) {
+          console.error("ID duplicado recebido:", item.id);
+          return;
+        }
 
-      //validacao do campo requestId
-      if (typeof dados.requestId !== "string") {
-        console.error("Resposta sem requestId válido.");
+        idsRecebidos.add(item.id);
+      }
+
+      const feeds: Feed[] = dados.feeds.map((item: any) => ({
+        id: item.id,
+        time: item.time,
+        portions: item.portions,
+        enabled: item.enabled,
+        days: item.days,
+      }));
+
+      this.consultaPendenteId = null;
+      this.consultaPendenteEm = 0;
+
+      const reconciliado = this.reconciliarSalvamento(
+        dados.revision,
+        dados.requestId,
+        feeds,
+      );
+
+      if (!reconciliado) {
+        console.warn("Lista não atualizada devido à reconciliação pendente.");
         return;
       }
 
-      this.reconciliarSalvamento(dados.revision, dados.requestId, feeds);
-
-      this.consultaPendenteId = null;
       this.revision = dados.revision;
       this.revisaoCarregada = true;
       this.ultimoFeedRecebido = feeds;
@@ -378,11 +436,6 @@ export class MqttService implements IMqttService {
       return;
     }
 
-    if (this.consultaPendenteId) {
-      console.log("Já existe uma consulta à NVS em andamento.");
-      return;
-    }
-
     console.log("Consultando NVS para recuperar salvamento pendente...");
 
     this.solicitarAgendamentos();
@@ -392,6 +445,30 @@ export class MqttService implements IMqttService {
     if (!this.client?.connected) {
       console.warn("MQTT desconectado.");
       return;
+    }
+
+    if (!this.espEstaOnline()) {
+      console.warn("ESP32 offline. Consulta não realizada.");
+      return;
+    }
+
+    if (!this.client?.connected) {
+      console.warn("MQTT desconectado.");
+      return;
+    }
+
+    if (this.consultaPendenteId) {
+      const tempoDecorrido = Date.now() - this.consultaPendenteEm;
+
+      if (tempoDecorrido < this.TIMEOUT_CONSULTA) {
+        console.log("Já existe uma consulta em andamento.");
+        return;
+      }
+
+      console.warn("Consulta anterior expirou. Iniciando nova consulta.");
+
+      this.consultaPendenteId = null;
+      this.consultaPendenteEm = 0;
     }
 
     const queryId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -406,6 +483,11 @@ export class MqttService implements IMqttService {
       (error) => {
         if (error) {
           console.error("Erro ao solicitar agendamentos:", error);
+
+          if (this.consultaPendenteId === queryId) {
+            this.consultaPendenteId = null;
+            this.consultaPendenteEm = 0;
+          }
         }
       },
     );
@@ -458,6 +540,48 @@ export class MqttService implements IMqttService {
         return;
       }
 
+      if (!Array.isArray(feeds) || feeds.length > 15) {
+        reject(new Error("Quantidade de agendamentos inválida."));
+        return;
+      }
+
+      const ids = new Set<string>();
+
+      const diasValidos = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+      for (const feed of feeds) {
+        if (
+          !feed.id ||
+          typeof feed.id !== "string" ||
+          feed.id.trim() === "" ||
+          feed.id.length >= 80 ||
+          ids.has(feed.id) ||
+          typeof feed.time !== "string" ||
+          !/^([01]\d|2[0-3]):[0-5]\d$/.test(feed.time) ||
+          !Number.isInteger(Number(feed.portions)) ||
+          Number(feed.portions) < 1 ||
+          Number(feed.portions) > 60 ||
+          typeof feed.enabled !== "boolean" ||
+          !Array.isArray(feed.days) ||
+          feed.days.length < 1 ||
+          feed.days.length > 7 ||
+          !feed.days.every(
+            (dia) => typeof dia === "string" && diasValidos.includes(dia),
+          ) ||
+          new Set(feed.days).size !== feed.days.length
+        ) {
+          reject(new Error("Existe um agendamento com dados inválidos."));
+          return;
+        }
+
+        ids.add(feed.id);
+      }
+
+      if (this.revision >= 4294967295) {
+        reject(new Error("Limite máximo de revisões atingido."));
+        return;
+      }
+
       const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const revision = this.revision + 1;
 
@@ -469,10 +593,11 @@ export class MqttService implements IMqttService {
           time: item.time,
           portions: Number(item.portions),
           enabled: item.enabled,
-          days: Array.isArray(item.days) ? item.days.join(", ") : "",
+          days: [...item.days],
         })),
       };
 
+      const feedsEnviados = payload.feeds;
       const timeout = setTimeout(() => {
         if (this.ackPendente?.requestId !== requestId) return;
 
@@ -481,7 +606,7 @@ export class MqttService implements IMqttService {
         this.salvamentoIncerto = {
           requestId,
           revision,
-          feeds,
+          feeds: feedsEnviados,
           criadoEm: Date.now(),
         };
 
@@ -498,7 +623,7 @@ export class MqttService implements IMqttService {
       this.ackPendente = {
         requestId,
         revision,
-        feeds,
+        feeds: feedsEnviados,
         resolve: () => {
           this.revision = revision;
           resolve();
@@ -514,8 +639,24 @@ export class MqttService implements IMqttService {
         (error) => {
           if (error && this.ackPendente?.requestId === requestId) {
             clearTimeout(timeout);
+
             this.ackPendente = null;
-            reject(error);
+
+            this.salvamentoIncerto = {
+              requestId,
+              revision,
+              feeds: feedsEnviados,
+              criadoEm: Date.now(),
+            };
+
+            console.error(
+              "Falha na publicação MQTT. Salvamento será verificado na NVS.",
+              error,
+            );
+
+            reject(new SalvamentoPendenteError());
+
+            this.consultarSalvamentoPendente();
           }
         },
       );
@@ -527,15 +668,21 @@ export class MqttService implements IMqttService {
       return false;
     }
 
-    return a.every((feed, index) => {
-      const outro = b[index];
+    return a.every((feed) => {
+      const outro = b.find((item) => item.id === feed.id);
+
+      if (!outro) {
+        return false;
+      }
+
+      const diasA = [...feed.days].sort();
+      const diasB = [...outro.days].sort();
 
       return (
-        feed.id === outro.id &&
         feed.time === outro.time &&
         Number(feed.portions) === Number(outro.portions) &&
         feed.enabled === outro.enabled &&
-        JSON.stringify(feed.days) === JSON.stringify(outro.days)
+        JSON.stringify(diasA) === JSON.stringify(diasB)
       );
     });
   }
@@ -544,16 +691,14 @@ export class MqttService implements IMqttService {
     revisionRecebida: number,
     requestIdRecebido: string,
     feedsRecebidos: Feed[],
-  ): void {
+  ): boolean {
     const pendente = this.salvamentoIncerto;
 
-    if (!pendente) return;
+    if (!pendente) return true;
 
-    //se nvs ainda apresenta uma revisao anterior
     if (revisionRecebida < pendente.revision) {
       console.warn("Revisão anterior à operação pendente.");
-
-      return;
+      return false;
     }
 
     const confirmado =
@@ -561,21 +706,27 @@ export class MqttService implements IMqttService {
       requestIdRecebido === pendente.requestId &&
       this.compararFeeds(feedsRecebidos, pendente.feeds);
 
-    this.salvamentoIncerto = null;
-
     if (confirmado) {
+      this.salvamentoIncerto = null;
+
       console.log("Salvamento confirmado pela NVS:", requestIdRecebido);
 
       this.reconciliacaoListeners.forEach((listener) => {
         listener("confirmado");
       });
-    } else {
-      console.warn("A NVS não corresponde à operação pendente.");
 
-      this.reconciliacaoListeners.forEach((listener) => {
-        listener("conflito");
-      });
+      return true;
     }
+
+    console.warn(
+      "A NVS não corresponde à operação pendente. Mantendo salvamento incerto.",
+    );
+
+    this.reconciliacaoListeners.forEach((listener) => {
+      listener("conflito");
+    });
+
+    return false;
   }
 
   public espEstaOnline(): boolean {

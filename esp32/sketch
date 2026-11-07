@@ -55,16 +55,17 @@ unsigned long tempoMotor = 0;
 const char* NTP_SERVER      = "pool.ntp.org";
 const long  GMT_OFFSET_SEC  = -3 * 3600;
 const int   DAYLIGHT_OFFSET = 0;
-int lastCheckedMinute       = -1;
 
 //ESTRUTURA DE AGENDAMENTOS
 
 struct FeedSchedule {
+  char id[80];
  int hour;
  int minute;
  int duration;
  bool enabled;
- char days[60];
+ char days[7][4];
+ int daysCount;
 };
 
 
@@ -87,13 +88,12 @@ void publicarStatus(const char* status);
 void mensagemRecebida(char* topic, byte* payload, unsigned int length);
 void acionarMotorPorSegundos(unsigned long segundos);
 void verificarAgendamentosLocais();
-bool salvarAgendamentosNoFlash(const String& jsonPayload);
-void carregarAgendamentosDoFlash();
-void processarJSONAgendamentos(const String& jsonPayload);
+bool carregarAgendamentosDoFlash();
+bool processarJSONAgendamentos(const String& jsonPayload);
 void publicarAgendamentosDoFlash(const String& queryId = "");
 void publicarAckAgendamentos(
   const String& requestId,
-  unsigned long revision,
+  uint32_t revision,
   const char* status
 );
 bool migrarAgendamentosAntigos();
@@ -244,7 +244,7 @@ void conectarMQTT() {
 
 void publicarAckAgendamentos(
   const String& requestId,
-  unsigned long revision,
+  uint32_t revision,
   const char* status
 ) {
   JsonDocument doc;
@@ -355,6 +355,12 @@ void mensagemRecebida(char* topic, byte* payload, unsigned int length) {
       return;
     }
 
+    if (revisionAtual == UINT32_MAX) {
+      Serial.println("ERRO: Limite maximo de revisoes atingido.");
+      publicarAckAgendamentos(requestId, revision, "rejected");
+      return;
+    }
+    
     // Somente a proxima revisao pode ser gravada
     if (revision <= revisionAtual ||
         revision != revisionAtual + 1) {
@@ -375,12 +381,14 @@ void mensagemRecebida(char* topic, byte* payload, unsigned int length) {
           revision,
           feedsJSON
         )) {
-      Serial.println("ERRO: Falha ao salvar na NVS.");
-      publicarAckAgendamentos(requestId, revision, "rejected");
+      Serial.println("ERRO: Falha ao salvar ou verificar registro na NVS.");
       return;
     }
 
-    carregarAgendamentosDoFlash();
+    if (!carregarAgendamentosDoFlash()) {
+      Serial.println("ERRO: Registro salvo, mas falha ao atualizar a RAM.");
+      return;
+    }
 
     publicarAckAgendamentos(requestId, revision, "saved");
 
@@ -432,7 +440,6 @@ void acionarMotorPorSegundos(unsigned long segundos) {
  publicarStatus("alimentando");
 }
 
-
 //MEMORIA FLASH SINCRO AGENDAMENTOS
 bool validarAgendamentos(const String& jsonPayload) {
   JsonDocument doc;
@@ -463,17 +470,24 @@ bool validarAgendamentos(const String& jsonPayload) {
 
     JsonObject obj = item.as<JsonObject>();
 
-    if (!obj["time"].is<const char*>() ||
+    // Validar campos obrigatorios
+    if (!obj["id"].is<const char*>() ||
+        !obj["time"].is<const char*>() ||
         !obj["portions"].is<int>() ||
         !obj["enabled"].is<bool>() ||
-        !obj["days"].is<const char*>()) {
+        !obj["days"].is<JsonArray>()) {
       Serial.println("ERRO: Campos ausentes ou invalidos.");
       return false;
     }
 
+    String id = obj["id"].as<String>();
     String horario = obj["time"].as<String>();
-    String dias = obj["days"].as<String>();
     int duracao = obj["portions"].as<int>();
+
+    if (id.isEmpty() || id.length() >= 80) {
+      Serial.println("ERRO: ID invalido.");
+      return false;
+    }
 
     if (horario.length() != 5 ||
         horario.charAt(2) != ':' ||
@@ -494,41 +508,59 @@ bool validarAgendamentos(const String& jsonPayload) {
       return false;
     }
 
-    if (dias.isEmpty()) {
-      Serial.println("ERRO: Agendamento sem dias.");
+    // Validar array de dias
+    JsonArray dias = obj["days"].as<JsonArray>();
+
+    if (dias.size() < 1 || dias.size() > 7) {
+      Serial.println("ERRO: Quantidade de dias invalida.");
       return false;
     }
 
-    int inicio = 0;
-    bool encontrouDia = false;
+    bool diasEncontrados[7] = {false, false, false, false, false, false, false};
 
-    while (inicio < dias.length()) {
-      int separador = dias.indexOf(',', inicio);
-      if (separador == -1) separador = dias.length();
+    for (JsonVariant diaAtual : dias) {
+      if (!diaAtual.is<const char*>()) {
+        Serial.println("ERRO: Dia deve ser uma string.");
+        return false;
+      }
 
-      String dia = dias.substring(inicio, separador);
-      dia.trim();
+      const char* dia = diaAtual.as<const char*>();
 
-      bool valido = false;
+      int indiceDia = -1;
 
-      for (const char* diaValido : diasValidos) {
-        if (dia == diaValido) {
-          valido = true;
+      for (int i = 0; i < 7; i++) {
+        if (strcmp(dia, diasValidos[i]) == 0) {
+          indiceDia = i;
           break;
         }
       }
 
-      if (!valido) {
-        Serial.println("ERRO: Dia invalido: " + dia);
+      if (indiceDia == -1) {
+        Serial.print("ERRO: Dia invalido: ");
+        Serial.println(dia);
         return false;
       }
 
-      encontrouDia = true;
-      inicio = separador + 1;
-    }
+      if (diasEncontrados[indiceDia]) {
+        Serial.println("ERRO: Dia repetido no agendamento.");
+        return false;
+      }
 
-    if (!encontrouDia) {
-      return false;
+      diasEncontrados[indiceDia] = true;
+    }
+  }
+
+  for (size_t i = 0; i < array.size(); i++) {
+    if (i == 0) break;
+
+    for (size_t j = 0; j < i; j++) {
+      JsonObject atual = array[i].as<JsonObject>();
+      JsonObject anterior = array[j].as<JsonObject>();
+
+      if (atual["id"].as<String>() == anterior["id"].as<String>()) {
+        Serial.println("ERRO: ID duplicado.");
+        return false;
+      }
     }
   }
 
@@ -588,6 +620,18 @@ bool salvarRegistroAgendamentos(
   uint32_t revision,
   const String& feedsJSON
 ) {
+
+  if (requestId.length() == 0 || revision == 0) {
+    Serial.println("Erro: requestId ou revision invalido.");
+    return false;
+  }
+
+  if (revisionAtual == UINT32_MAX ||
+    revision != revisionAtual + 1) {
+    Serial.println("Erro: revisao inesperada.");
+    return false;
+  }
+
   JsonDocument feedsDoc;
 
   DeserializationError erro = deserializeJson(feedsDoc, feedsJSON);
@@ -648,12 +692,9 @@ bool salvarRegistroAgendamentos(
     return false;
   }
 
-  revisionAtual = revision;
-  ultimoRequestId = requestId;
-
   Serial.printf(
     "Registro salvo na NVS! Revisao: %lu\n",
-    (unsigned long)revisionAtual
+    (unsigned long)revision
   );
 
   return true;
@@ -729,19 +770,270 @@ bool migrarIdsAgendamentos() {
   return true;
 }
 
-void carregarAgendamentosDoFlash() {
+bool carregarAgendamentosDoFlash() {
   if (!migrarAgendamentosAntigos()) {
     Serial.println("Falha ao preparar armazenamento de agendamentos.");
-    return;
+    return false;
   }
 
   if (!migrarIdsAgendamentos()) {
     Serial.println("Falha ao preparar IDs dos agendamentos.");
-    return;
+    return false;
   }
 
   if (!preferences.begin("feeder", true)) {
     Serial.println("Erro ao abrir NVS para leitura.");
+    return false;
+  }
+
+  String registro = preferences.getString("schedule_v2", "");
+  preferences.end();
+
+  JsonDocument doc;
+
+  DeserializationError erro = deserializeJson(doc, registro);
+
+  if (
+    erro ||
+    !doc.is<JsonObject>() ||
+    !doc["feeds"].is<JsonArray>() ||
+    !doc["revision"].is<uint32_t>() ||
+    !doc["requestId"].is<const char*>() ||
+    (
+      doc["revision"].as<uint32_t>() > 0 &&
+      strlen(doc["requestId"].as<const char*>()) == 0
+    )
+  ) {
+    Serial.println("Erro ao interpretar registro da NVS.");
+    return false;
+  }
+
+  uint32_t novaRevision = doc["revision"].as<uint32_t>();
+  String novoRequestId = doc["requestId"].as<String>();
+
+  String feedsJSON;
+  serializeJson(doc["feeds"], feedsJSON);
+
+  if (!processarJSONAgendamentos(feedsJSON)) {
+    Serial.println("Falha ao processar agendamentos da NVS.");
+    return false;
+  }
+
+  revisionAtual = novaRevision;
+  ultimoRequestId = novoRequestId;
+
+  Serial.println("Agendamentos recuperados do novo registro NVS.");
+
+  Serial.printf(
+    "Revisao atual: %lu\n",
+    (unsigned long)revisionAtual
+  );
+
+  return true;
+}
+
+bool processarJSONAgendamentos(const String& jsonPayload) {
+  // Valida todos os dados antes de alterar a RAM
+  if (!validarAgendamentos(jsonPayload)) {
+    Serial.println("ERRO: Agendamentos invalidos para processamento.");
+    return false;
+  }
+
+  JsonDocument doc;
+
+  DeserializationError erro = deserializeJson(doc, jsonPayload);
+
+  if (erro || !doc.is<JsonArray>()) {
+    Serial.println("Erro no JSON de agendamentos.");
+    return false;
+  }
+
+  JsonArray array = doc.as<JsonArray>();
+
+  // Armazenamento temporário: evita atualização parcial da RAM
+  FeedSchedule temporarios[MAX_SCHEDULES];
+
+  int quantidade = array.size();
+
+  for (int i = 0; i < quantidade; i++) {
+    JsonObject obj = array[i].as<JsonObject>();
+
+    FeedSchedule& schedule = temporarios[i];
+
+    String id = obj["id"].as<String>();
+
+    strncpy(
+      schedule.id,
+      id.c_str(),
+      sizeof(schedule.id) - 1
+    );
+
+    schedule.id[sizeof(schedule.id) - 1] = '\0';
+
+    String horario = obj["time"].as<String>();
+
+    schedule.hour = horario.substring(0, 2).toInt();
+    schedule.minute = horario.substring(3, 5).toInt();
+
+    schedule.duration = obj["portions"].as<int>();
+    schedule.enabled = obj["enabled"].as<bool>();
+
+    JsonArray daysArray = obj["days"].as<JsonArray>();
+
+    schedule.daysCount = 0;
+
+    for (JsonVariant dia : daysArray) {
+      const char* nomeDia = dia.as<const char*>();
+
+      strncpy(
+        schedule.days[schedule.daysCount],
+        nomeDia,
+        sizeof(schedule.days[schedule.daysCount]) - 1
+      );
+
+      schedule.days[schedule.daysCount]
+        [sizeof(schedule.days[schedule.daysCount]) - 1] = '\0';
+
+      schedule.daysCount++;
+    }
+  }
+
+  // Somente agora atualiza a lista global
+  for (int i = 0; i < quantidade; i++) {
+    schedules[i] = temporarios[i];
+  }
+
+  scheduleCount = quantidade;
+
+  Serial.printf(
+    "Agendamentos carregados na memoria RAM: %d\n",
+    scheduleCount
+  );
+
+  Serial.println("================================");
+  Serial.println("      LISTA DE AGENDAMENTOS");
+  Serial.println("================================");
+
+  for (int i = 0; i < scheduleCount; i++) {
+    Serial.printf(
+      "%d. ID: %s\n",
+      i + 1,
+      schedules[i].id
+    );
+
+    Serial.printf(
+      "   Horario: %02d:%02d\n",
+      schedules[i].hour,
+      schedules[i].minute
+    );
+
+    Serial.print("   Dias: ");
+
+    for (int j = 0; j < schedules[i].daysCount; j++) {
+      Serial.print(schedules[i].days[j]);
+
+      if (j < schedules[i].daysCount - 1) {
+        Serial.print(", ");
+      }
+    }
+
+    Serial.println();
+
+    Serial.printf(
+      "   Duracao: %d segundos\n",
+      schedules[i].duration
+    );
+
+    Serial.print("   Status: ");
+    Serial.println(
+      schedules[i].enabled ? "ATIVO" : "DESATIVADO"
+    );
+
+    Serial.println("--------------------------------");
+  }
+
+  Serial.printf(
+    "Total de agendamentos: %d/%d\n",
+    scheduleCount,
+    MAX_SCHEDULES
+  );
+
+  Serial.println("================================");
+
+  return true;
+}
+
+//CHECA HORARIO
+void verificarAgendamentosLocais() {
+  struct tm timeinfo;
+
+  if (!getLocalTime(&timeinfo)) return;
+
+  time_t agora = time(nullptr);
+  time_t minutoAtual = agora / 60;
+
+  static time_t ultimoMinutoVerificado = -1;
+
+  if (minutoAtual == ultimoMinutoVerificado) return;
+
+  ultimoMinutoVerificado = minutoAtual;
+
+  const char* wdayNames[] = {
+    "sun", "mon", "tue", "wed", "thu", "fri", "sat"
+  };
+
+  const char* hojeNome = wdayNames[timeinfo.tm_wday];
+
+  for (int i = 0; i < scheduleCount; i++) {
+    if (!schedules[i].enabled) continue;
+
+    if (schedules[i].hour == timeinfo.tm_hour &&
+        schedules[i].minute == timeinfo.tm_min) {
+
+      bool deveExecutar = false;
+
+      //verifica se o dia atual ta no array
+      for (int j = 0; j < schedules[i].daysCount; j++) {
+        if (strcmp(schedules[i].days[j], hojeNome) == 0) {
+          deveExecutar = true;
+          break;
+        }
+      }
+
+      if (deveExecutar) {
+        Serial.println("================================");
+        Serial.println("DISPARO AUTONOMO DE AGENDAMENTO!");
+
+        Serial.print("ID: ");
+        Serial.println(schedules[i].id);
+
+        Serial.printf(
+          "Horario: %02d:%02d\n",
+          schedules[i].hour,
+          schedules[i].minute
+        );
+
+        Serial.printf(
+          "Duracao: %d segundos\n",
+          schedules[i].duration
+        );
+
+        Serial.println("================================");
+
+        acionarMotorPorSegundos(schedules[i].duration);
+      }
+    }
+  }
+}
+
+void publicarAgendamentosDoFlash(const String& queryId) {
+  if (!carregarAgendamentosDoFlash()) {
+    Serial.println("Falha ao atualizar a RAM antes de responder ao aplicativo.");
+    return;
+  }
+
+  if (!preferences.begin("feeder", true)) {
+    Serial.println("Erro ao abrir NVS.");
     return;
   }
 
@@ -753,145 +1045,37 @@ void carregarAgendamentosDoFlash() {
 
   DeserializationError erro = deserializeJson(doc, registro);
 
-  if (erro || !doc.is<JsonObject>() ||
-      !doc["feeds"].is<JsonArray>()) {
-    Serial.println("Erro ao interpretar registro da NVS.");
-    return;
-  }
-
-  revisionAtual = doc["revision"] | 0;
-  ultimoRequestId = doc["requestId"].as<String>();
-
-  String feedsJSON;
-  serializeJson(doc["feeds"], feedsJSON);
-
-  processarJSONAgendamentos(feedsJSON);
-
-  Serial.println("Agendamentos recuperados do novo registro NVS.");
-
-  Serial.printf(
-    "Revisao atual: %lu\n",
-    (unsigned long)revisionAtual
-  );
-}
-
-void processarJSONAgendamentos(const String& jsonPayload) {
- StaticJsonDocument<2048> doc;
- DeserializationError error = deserializeJson(doc, jsonPayload);
-
-
- if (error) {
-   Serial.print("Erro no JSON de agendamentos: ");
-   Serial.println(error.c_str());
-   return;
- }
-
-
- JsonArray array = doc.as<JsonArray>();
- scheduleCount = 0;
-
-
- for (JsonObject obj : array) {
-   if (scheduleCount >= MAX_SCHEDULES) break;
-
-
-   String timeStr = obj["time"] | "00:00";
-   schedules[scheduleCount].hour = timeStr.substring(0, 2).toInt();
-   schedules[scheduleCount].minute = timeStr.substring(3, 5).toInt();
-   schedules[scheduleCount].duration = obj["portions"] | 5;
-   schedules[scheduleCount].enabled = obj["enabled"] | true;
-
-
-   String daysStr = obj["days"] | "";
-  strncpy(
-    schedules[scheduleCount].days,
-    daysStr.c_str(),
-    sizeof(schedules[scheduleCount].days) - 1
-  );
-
-schedules[scheduleCount].days[sizeof(schedules[scheduleCount].days) - 1] = '\0';
-
-
-   scheduleCount++;
- }
-
-
- Serial.printf("Agendamentos carregados na memória RAM: %d\n", scheduleCount);
-}
-
-//CHECA HORARIO
-void verificarAgendamentosLocais() {
- struct tm timeinfo;
- if (!getLocalTime(&timeinfo)) return;
-
- if (timeinfo.tm_min == lastCheckedMinute) return;
- lastCheckedMinute = timeinfo.tm_min;
-
- const char* wdayNames[] = {"sun", "mon", "tue", "wed", "thu", "fri", "sat"};
- String hojeNome = String(wdayNames[timeinfo.tm_wday]);
-
-
- for (int i = 0; i < scheduleCount; i++) {
-   if (!schedules[i].enabled) continue;
-
-
-   if (schedules[i].hour == timeinfo.tm_hour && schedules[i].minute == timeinfo.tm_min) {
-     String diasStr = String(schedules[i].days);
-     diasStr.toLowerCase(); // Garante tudo em minúsculo para evitar erros
-
-
-     bool deveExecutar = false;
-     if (diasStr.indexOf("todos os dias") != -1 || diasStr.indexOf(hojeNome) != -1) {
-       deveExecutar = true;
-     }
-
-
-     if (deveExecutar) {
-       Serial.printf("DISPARO AUTÔNOMO DE AGENDAMENTO: %02d:%02d!\n", schedules[i].hour, schedules[i].minute);
-       acionarMotorPorSegundos(schedules[i].duration);
-     }
-   }
- }
-}
-
-
-void publicarAgendamentosDoFlash(const String& queryId) {
-  if (!preferences.begin("feeder", true)) {
-    Serial.println("Erro ao abrir NVS.");
-    return;
-  }
-
-  String registro =
-    preferences.getString("schedule_v2", "");
-
-  preferences.end();
-
-  JsonDocument doc;
-
-  DeserializationError erro =
-    deserializeJson(doc, registro);
-
-  if (erro || !doc.is<JsonObject>() ||
-      !doc["feeds"].is<JsonArray>() ||
-      !doc["revision"].is<uint32_t>() ||
-      !doc["requestId"].is<const char*>()) {
+  if (
+    erro ||
+    !doc.is<JsonObject>() ||
+    !doc["feeds"].is<JsonArray>() ||
+    !doc["revision"].is<uint32_t>() ||
+    !doc["requestId"].is<const char*>() ||
+    (
+      doc["revision"].as<uint32_t>() > 0 &&
+      strlen(doc["requestId"].as<const char*>()) == 0
+    )
+  ) {
     Serial.println("Erro ao recuperar agendamentos.");
     return;
   }
 
-  // Monta a resposta com os dados salvos na NVS
+  //valida os agendamentos recuperados na nvs
+  String feedsJSON;
+  serializeJson(doc["feeds"], feedsJSON);
+
+  if (!validarAgendamentos(feedsJSON)) {
+    Serial.println("ERRO: Agendamentos armazenados na NVS sao invalidos.");
+    return;
+  }
+
+  //motna a resposta com os dados salvos na nvs
   JsonDocument resposta;
 
-  resposta["revision"] =
-    doc["revision"].as<uint32_t>();
-
-  resposta["requestId"] =
-    doc["requestId"].as<String>();
-
+  resposta["revision"] = doc["revision"].as<uint32_t>();
+  resposta["requestId"] = doc["requestId"].as<String>();
   resposta["queryId"] = queryId;
-
-  resposta["feeds"] =
-    doc["feeds"].as<JsonArray>();
+  resposta["feeds"] = doc["feeds"].as<JsonArray>();
 
   String respostaJSON;
   serializeJson(resposta, respostaJSON);
@@ -910,5 +1094,7 @@ void publicarAgendamentosDoFlash(const String& queryId) {
         ? "Resposta enviada ao aplicativo."
         : "Falha ao enviar resposta."
     );
+  } else {
+    Serial.println("MQTT desconectado. Resposta nao enviada.");
   }
 }
