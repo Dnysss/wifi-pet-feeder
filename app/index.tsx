@@ -22,6 +22,8 @@ import {
 import { Feed } from "@/types/feed";
 import FeedCard from "../components/FeedCard";
 
+const MAX_AGENDAMENTOS = 15;
+
 export default function WifiPetFeeder() {
   const params = useLocalSearchParams();
   const {
@@ -84,6 +86,15 @@ export default function WifiPetFeeder() {
         days: Array.isArray(parsedData.days) ? parsedData.days : [],
       };
 
+      //verifica o limite de agendamentos
+      if (feeds.length >= MAX_AGENDAMENTOS) {
+        Alert.alert(
+          "Limite máximo atingido",
+          "Você atingiu o limite máximo de 15 agendamentos.",
+        );
+        return;
+      }
+
       if (!mqttService.espEstaOnline()) {
         Alert.alert(
           "Alimentador desconectado",
@@ -115,7 +126,7 @@ export default function WifiPetFeeder() {
     } catch (error) {
       console.error("Erro ao ler parâmetro:", error);
     }
-  }, [params.newFeed, alimentadorOnline, addFeed]);
+  }, [params.newFeed, alimentadorOnline, addFeed, feeds.length]);
 
   const handleDeleteFeed = () => {
     if (!selectedFeed) return;
@@ -196,6 +207,11 @@ export default function WifiPetFeeder() {
       <SyncStatus status={statusSincronizacao} online={alimentadorOnline} />
 
       <View style={styles.bottomArea}>
+        <View style={styles.feedCountContainer}>
+          <Text style={styles.feedCountText}>
+            {feeds.length}/{MAX_AGENDAMENTOS} agendamentos
+          </Text>
+        </View>
         <ScrollView
           style={styles.feedScroll}
           contentContainerStyle={styles.feedList}
@@ -228,6 +244,14 @@ export default function WifiPetFeeder() {
           style={styles.addButton}
           disabled={salvando}
           onPress={() => {
+            if (feeds.length >= MAX_AGENDAMENTOS) {
+              Alert.alert(
+                "Limite máximo atingido",
+                "Você atingiu o limite máximo de 15 agendamentos.",
+              );
+              return;
+            }
+
             if (!verificarConexao()) return;
 
             router.push("/add-feed");
@@ -506,6 +530,17 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   cancelButtonText: {
+    color: "#666",
+  },
+  feedCountContainer: {
+    paddingHorizontal: 15,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+
+  feedCountText: {
+    fontSize: 14,
+    fontWeight: "600",
     color: "#666",
   },
 });
