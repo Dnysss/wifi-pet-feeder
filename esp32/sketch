@@ -104,94 +104,130 @@ bool salvarRegistroAgendamentos(
 );
 
 void setup() {
- Serial.begin(115200);
- delay(1000);
+  Serial.begin(115200);
+  delay(1000);
 
- // configuracao do Motor
- motor.setMaxSpeed(1000);
- motor.setSpeed(velocidade);
- motor.disableOutputs();
+  // configuracao do Motor
+  motor.setMaxSpeed(1000);
+  motor.setSpeed(velocidade);
+  motor.disableOutputs();
 
+  // TLS e MQTT
+  espClient.setCACert(root_ca);
 
- // conexoes de Rede e Hora
- conectarWiFi();
- setupNTP();
-
-
- // TLS e MQTT
- espClient.setCACert(root_ca);
- mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
- mqttClient.setCallback(mensagemRecebida);
-
- //intervalo de keepalive MQTT
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mensagemRecebida);
   mqttClient.setKeepAlive(30);
+  mqttClient.setSocketTimeout(10);
+  mqttClient.setBufferSize(2048);
 
-//Carrega agendamentos gravados na memoria flash NVS
- carregarAgendamentosDoFlash();
+  // confg do wifi
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
 
- mqttClient.setBufferSize(2048);
+  //conexoes de rede e hora
+  conectarWiFi();
+  setupNTP();
 
- conectarMQTT();
+  carregarAgendamentosDoFlash();
+
+  Serial.println("ESP32 iniciado!");
 }
 
 void loop() {
- if (!mqttClient.connected()) {
-   conectarMQTT();
- }
- mqttClient.loop();
+  //cerifica e tenta recuperar a conexao
+  conectarWiFi();
 
+  static bool wifiAnterior = false;
+  bool wifiAtual = (WiFi.status() == WL_CONNECTED);
 
- //controle domotor
- if (motorLigado) {
-   motor.runSpeed();
+  if (wifiAtual && !wifiAnterior) {
+    Serial.println("================================");
+    Serial.println("WI-FI CONECTADO!");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("Sinal Wi-Fi (RSSI): ");
+    Serial.println(WiFi.RSSI());
+    Serial.println("================================");
+  }
 
+  if (!wifiAtual && wifiAnterior) {
+    Serial.println("Wi-Fi desconectado!");
+  }
 
-   if (millis() - inicioMotor >= tempoMotor) {
-     motorLigado = false;
-     motor.disableOutputs();
+  wifiAnterior = wifiAtual;
 
+  //gerencia o mqtt somente quando o wifi tiver conectado
+  if (motorLigado) {
+    motor.runSpeed();
 
-     Serial.println("\n================================");
-     Serial.println("Tempo terminado. Motor parado.");
-     Serial.println("================================");
+    if (millis() - inicioMotor >= tempoMotor) {
+      motorLigado = false;
+      motor.disableOutputs();
 
+      Serial.println("\n================================");
+      Serial.println("Tempo terminado. Motor parado.");
+      Serial.println("================================");
 
-     publicarStatus("finalizado");
-   }
- }
+      publicarStatus("finalizado");
+    }
+  }
 
+  //verifica a hora
+  verificarAgendamentosLocais();
 
- //checagem de relogio para acionamento automatico
- verificarAgendamentosLocais();
+  //gerenciar o mqtt o wifi tiver conectado
+  if (WiFi.status() == WL_CONNECTED) {
+
+  //nao tentar uma nova conexão com o acionamento do motor
+  if (!mqttClient.connected() && !motorLigado) {
+    conectarMQTT();
+  }
+  // manter conexao mqtt quando tiver conectado
+  if (mqttClient.connected()) {
+    mqttClient.loop();
+  }
+
+  } else {
+    if (mqttClient.connected()) {
+      mqttClient.disconnect();
+    }
+  }
 }
 
 // REDE E NTP PROTOCOLO DE TEMPO
 void conectarWiFi() {
- Serial.print("Conectando ao Wi-Fi");
- WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+ //se tiver conectado não precisa tentar novamente
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
 
+  unsigned long agora = millis();
 
- while (WiFi.status() != WL_CONNECTED) {
-   delay(500);
-   Serial.print(".");
- }
+  //aguarda intervalo entre as tentativas
+  if (!primeiraTentativaWiFi &&
+      agora - ultimaTentativaWiFi < INTERVALO_WIFI) {
+    return;
+  }
 
+  primeiraTentativaWiFi = false;
+  ultimaTentativaWiFi = agora;
 
- Serial.println("\nWi-Fi conectado!");
- Serial.print("IP: ");
- Serial.println(WiFi.localIP());
+  Serial.println("Iniciando conexão com o Wi-Fi...");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
 
 void setupNTP() {
- configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET, NTP_SERVER);
- struct tm timeinfo;
- Serial.print("Sincronizando relógio via NTP...");
- while (!getLocalTime(&timeinfo)) {
-   Serial.print(".");
-   delay(500);
- }
- Serial.println("\nHora certa sincronizada!");
+ configTime(
+    GMT_OFFSET_SEC,
+    DAYLIGHT_OFFSET,
+    NTP_SERVER
+  );
+
+  Serial.println("Sincronização NTP iniciada.");
+  Serial.println("Aguardando sincronização em segundo plano...");
 }
 
 //COMUNICACAO MQTT
@@ -205,41 +241,76 @@ void publicarStatus(const char* status) {
 
 
 void conectarMQTT() {
- while (!mqttClient.connected()) {
-   Serial.println("\nConectando ao HiveMQ...");
+ //verifica se o wifi ta conectado
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
 
+  //aguarda a sincronizacao da hora antes da tls
+  time_t agora = time(nullptr);
 
-   String clientId = "ESP32-Alimentador-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  if (agora < 1700000000) {
+    return;
+  }
 
+  //nao tenta conectar se ja tiver conectado
+  if (mqttClient.connected()) {
+    return;
+  }
 
-   if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWORD, MQTT_TOPIC_PRESENCA, 1, true, "offline")) {
-     Serial.println("================================");
-     Serial.println("MQTT CONECTADO COM TLS!");
-     Serial.println("================================");
+  unsigned long agora = millis();
 
-     //informa que o ESP32 esta online
-     mqttClient.publish(MQTT_TOPIC_PRESENCA, "online", true);
+  //aguarda o intervalo entre as tentativas
+  if (!primeiraTentativaMQTT &&
+      agora - ultimaTentativaMQTT < INTERVALO_MQTT) {
+    return;
+  }
 
-     mqttClient.subscribe(MQTT_TOPIC_COMANDO);
-     mqttClient.subscribe(MQTT_TOPIC_AGENDAMENTOS);
-     mqttClient.subscribe(MQTT_TOPIC_SOLICITAR_AGENDAMENTOS);
-    
-     Serial.print("Inscrito em: ");
-     Serial.println(MQTT_TOPIC_COMANDO);
-     Serial.print("Inscrito em: ");
-     Serial.println(MQTT_TOPIC_AGENDAMENTOS);
-     Serial.print("Inscrito em: ");
-     Serial.println(MQTT_TOPIC_SOLICITAR_AGENDAMENTOS);
+  primeiraTentativaMQTT = false;
+  ultimaTentativaMQTT = agora;
 
+  Serial.println("\nConectando ao HiveMQ...");
 
-     publicarStatus("online");
-   } else {
-     Serial.print("Falha MQTT, código: ");
-     Serial.println(mqttClient.state());
-     Serial.println("Tentando novamente em 5 segundos...");
-     delay(5000);
-   }
- }
+  String clientId = "ESP32-Alimentador-" +
+                    String((uint32_t)ESP.getEfuseMac(), HEX);
+
+  if (mqttClient.connect(
+        clientId.c_str(),
+        MQTT_USERNAME,
+        MQTT_PASSWORD,
+        MQTT_TOPIC_PRESENCA,
+        1,
+        true,
+        "offline"
+      )) {
+
+    Serial.println("================================");
+    Serial.println("MQTT CONECTADO COM TLS!");
+    Serial.println("================================");
+
+    //informar se o esp ta online
+    mqttClient.publish(MQTT_TOPIC_PRESENCA, "online", true);
+
+    mqttClient.subscribe(MQTT_TOPIC_COMANDO);
+    mqttClient.subscribe(MQTT_TOPIC_AGENDAMENTOS);
+    mqttClient.subscribe(MQTT_TOPIC_SOLICITAR_AGENDAMENTOS);
+
+    Serial.print("Inscrito em: ");
+    Serial.println(MQTT_TOPIC_COMANDO);
+
+    Serial.print("Inscrito em: ");
+    Serial.println(MQTT_TOPIC_AGENDAMENTOS);
+
+    Serial.print("Inscrito em: ");
+    Serial.println(MQTT_TOPIC_SOLICITAR_AGENDAMENTOS);
+
+    publicarStatus("online");
+
+  } else {
+    Serial.print("Falha MQTT, código: ");
+    Serial.println(mqttClient.state());
+    Serial.println("Tentando novamente em 5 segundos...");
+  }
 }
 
 void publicarAckAgendamentos(
@@ -965,16 +1036,25 @@ bool processarJSONAgendamentos(const String& jsonPayload) {
 
 //CHECA HORARIO
 void verificarAgendamentosLocais() {
+  time_t agora = time(nullptr);
+
+  if (agora < 1700000000) {
+    return;
+  }
+
   struct tm timeinfo;
 
-  if (!getLocalTime(&timeinfo)) return;
+  if (localtime_r(&agora, &timeinfo) == nullptr) {
+    return;
+  }
 
-  time_t agora = time(nullptr);
-  time_t minutoAtual = agora / 60;
+  static int ultimoMinutoVerificado = -1;
 
-  static time_t ultimoMinutoVerificado = -1;
+  int minutoAtual = timeinfo.tm_hour * 60 + timeinfo.tm_min;
 
-  if (minutoAtual == ultimoMinutoVerificado) return;
+  if (minutoAtual == ultimoMinutoVerificado) {
+    return;
+  }
 
   ultimoMinutoVerificado = minutoAtual;
 
